@@ -2,6 +2,7 @@
 from flask import Flask, render_template_string, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+from types import SimpleNamespace
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///catalog.db'
@@ -449,6 +450,7 @@ form_tpl = """
 {% block content %}
   <h1>{{ title }}</h1>
   <form method="post">
+    {% set handled_fields = ['id', 'name', 'category', 'description', 'price_cents', 'stock', 'image_url'] %}
     <div class="mb-3">
       <label class="form-label">Name</label>
       <input name="name" class="form-control" required value="{{ product.name if product else '' }}">
@@ -476,6 +478,24 @@ form_tpl = """
       </div>
     </div>
 
+    {# Render other/dynamic fields #}
+    <hr>
+    <h5 class="mt-4 mb-3">Additional Fields</h5>
+    {% if cols %}
+      {% for col in cols %}
+        {% set col_name = col[1] %}
+        {% if col_name not in handled_fields %}
+          {% set col_type = col[2] %}
+          {% set value = getattr(product, col_name, '') if product else '' %}
+          <div class="mb-3">
+            <label class="form-label">{{ col_name.replace('_', ' ')|title }}</label>
+            {% set input_type = 'number' if 'INT' in col_type|upper else 'text' %}
+            <input name="{{ col_name }}" type="{{ input_type }}" class="form-control" value="{{ value }}">
+          </div>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+
     <button class="btn btn-primary" type="submit">Save</button>
     <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Cancel</a>
   </form>
@@ -500,28 +520,24 @@ compare_tpl = """
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>Image</td>
-            {% for p in products %}
-              <td>{% if p.image_url %}<img src="{{ p.image_url }}" style="max-height:100px;">{% else %}-{% endif %}</td>
-            {% endfor %}
-          </tr>
-          <tr>
-            <td>Category</td>
-            {% for p in products %}<td>{{ p.category or '-' }}</td>{% endfor %}
-          </tr>
-          <tr>
-            <td>Description</td>
-            {% for p in products %}<td>{{ p.description or '-' }}</td>{% endfor %}
-          </tr>
-          <tr>
-            <td>Price</td>
-            {% for p in products %}<td>€{{ p.price_display() }}</td>{% endfor %}
-          </tr>
-          <tr>
-            <td>Stock</td>
-            {% for p in products %}<td>{{ p.stock }}</td>{% endfor %}
-          </tr>
+          {% for col in cols %}
+            {% set col_name = col[1] %}
+            <tr>
+              <td><strong>{{ col_name.replace('_', ' ')|title }}</strong></td>
+              {% for p in products %}
+                <td>
+                  {% set value = getattr(p, col_name, None) %}
+                  {% if col_name == 'price_cents' %}
+                    €{{ '%.2f'|format(value / 100.0 if value else 0) }}
+                  {% elif col_name == 'image_url' and value %}
+                    <img src="{{ value }}" style="max-height:100px;" alt="{{ p.name }} image">
+                  {% else %}
+                    {{ value if value is not none else '-' }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
         </tbody>
       </table>
     </div>
@@ -734,7 +750,9 @@ def add_product():
         flash('Product added')
         return redirect(url_for('index'))
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Add product', product=None)
+    cols_info = get_table_info('product')
+    cols_for_form = [c for c in cols_info if c[1] != 'id']
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Add product', product=None, cols=cols_for_form, getattr=getattr)
 
 @app.route('/edit/<int:product_id>', methods=['GET', 'POST'])
 def edit_product(product_id):
@@ -813,9 +831,8 @@ def edit_product(product_id):
         return f"{product.price_cents/100:.2f}"
     product.price_display = price_display
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Edit product', product=product)
-
-from types import SimpleNamespace
+    cols_for_form = [c for c in cols_info if c[1] != 'id']
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Edit product', product=product, cols=cols_for_form, getattr=getattr)
 
 @app.route('/delete/<int:product_id>')
 def delete_product(product_id):
@@ -828,11 +845,28 @@ def delete_product(product_id):
 @app.route('/compare')
 def compare():
     ids = request.args.getlist('ids', type=int)
-    if not ids:
-        products = []
-    else:
-        products = Product.query.filter(Product.id.in_(ids)).all()
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'compare.html')[0], products=products)
+    products = []
+    if ids:
+        # Fetch as dicts to include dynamic columns, not via SQLAlchemy model
+        with get_sqlite_connection() as conn:
+            # Get column names from the first cursor
+            cur = conn.execute("SELECT * FROM product WHERE id = ?", (ids[0],))
+            cols = [d[0] for d in cur.description]
+            row = cur.fetchone()
+            if row:
+                products.append(SimpleNamespace(**dict(zip(cols, row))))
+
+            # Fetch other products
+            for pid in ids[1:]:
+                cur = conn.execute("SELECT * FROM product WHERE id = ?", (pid,))
+                row = cur.fetchone()
+                if row:
+                    products.append(SimpleNamespace(**dict(zip(cols, row))))
+
+    cols_info = get_table_info('product')
+    # Exclude id column from comparison view
+    cols_for_table = [c for c in cols_info if c[1] != 'id']
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'compare.html')[0], products=products, cols=cols_for_table, getattr=getattr)
 
 # --- Schema designer routes -----------------------------------------------
 @app.route('/schema')

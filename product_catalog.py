@@ -3,6 +3,7 @@ Simple Flask + SQLite product catalog app in a single file.
 Features:
 - SQLite database (SQLAlchemy)
 - CRUD for products (create, read, update, delete)
+- Product comparison view (compare two or more products side by side)
 - Small web UI using Bootstrap served from the same file (render_template_string)
 
 Requirements:
@@ -34,7 +35,7 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     description = db.Column(db.Text, nullable=True)
-    price_cents = db.Column(db.Integer, nullable=False, default=0)  # store price as integer cents
+    price_cents = db.Column(db.Integer, nullable=False, default=0)
     stock = db.Column(db.Integer, nullable=False, default=0)
     category = db.Column(db.String(80), nullable=True)
     image_url = db.Column(db.String(400), nullable=True)
@@ -43,12 +44,13 @@ class Product(db.Model):
         return f"{self.price_cents / 100:.2f}"
 
 # --- Database helper --------------------------------------------------------
-# -- @app.before_first_request
-# -- def create_tables():
-# --    db.create_all()
+# - @app.before_first_request
+# - def create_tables():
+# -    db.create_all()
+
 with app.app_context():
     db.create_all()
-# --- Templates (kept inline so this file is self-contained) -----------------
+# --- Templates --------------------------------------------------------------
 layout = """
 <!doctype html>
 <html lang="en">
@@ -66,6 +68,7 @@ layout = """
           <ul class="navbar-nav me-auto">
             <li class="nav-item"><a class="nav-link" href="{{ url_for('index') }}">Products</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('add_product') }}">Add product</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('compare') }}">Compare</a></li>
           </ul>
         </div>
       </div>
@@ -100,30 +103,39 @@ index_tpl = """
   {% if products|length == 0 %}
     <p class="text-muted">No products yet. <a href="{{ url_for('add_product') }}">Add one</a>.</p>
   {% else %}
-    <div class="row row-cols-1 row-cols-md-3 g-3">
-      {% for p in products %}
-        <div class="col">
-          <div class="card h-100">
-            {% if p.image_url %}
-              <img src="{{ p.image_url }}" class="card-img-top" alt="{{ p.name }}" style="height:200px;object-fit:cover;">
-            {% endif %}
-            <div class="card-body">
-              <h5 class="card-title">{{ p.name }}</h5>
-              <h6 class="card-subtitle mb-2 text-muted">{{ p.category or 'Uncategorized' }}</h6>
-              <p class="card-text">{{ p.description[:140] }}{% if p.description|length > 140 %}…{% endif %}</p>
-            </div>
-            <div class="card-footer d-flex justify-content-between align-items-center">
-              <strong class="me-2">€{{ p.price_display() }}</strong>
-              <div>
-                <a class="btn btn-sm btn-primary" href="{{ url_for('view_product', product_id=p.id) }}">View</a>
-                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_product', product_id=p.id) }}">Edit</a>
-                <a class="btn btn-sm btn-danger" href="{{ url_for('delete_product', product_id=p.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+    <form method="get" action="{{ url_for('compare') }}">
+      <div class="row row-cols-1 row-cols-md-3 g-3">
+        {% for p in products %}
+          <div class="col">
+            <div class="card h-100">
+              {% if p.image_url %}
+                <img src="{{ p.image_url }}" class="card-img-top" alt="{{ p.name }}" style="height:200px;object-fit:cover;">
+              {% endif %}
+              <div class="card-body">
+                <h5 class="card-title">{{ p.name }}</h5>
+                <h6 class="card-subtitle mb-2 text-muted">{{ p.category or 'Uncategorized' }}</h6>
+                <p class="card-text">{{ p.description[:140] }}{% if p.description|length > 140 %}…{% endif %}</p>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}">
+                  <label class="form-check-label">Compare</label>
+                </div>
+              </div>
+              <div class="card-footer d-flex justify-content-between align-items-center">
+                <strong class="me-2">€{{ p.price_display() }}</strong>
+                <div>
+                  <a class="btn btn-sm btn-primary" href="{{ url_for('view_product', product_id=p.id) }}">View</a>
+                  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_product', product_id=p.id) }}">Edit</a>
+                  <a class="btn btn-sm btn-danger" href="{{ url_for('delete_product', product_id=p.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      {% endfor %}
-    </div>
+        {% endfor %}
+      </div>
+      <div class="mt-3">
+        <button class="btn btn-success" type="submit">Compare Selected</button>
+      </div>
+    </form>
   {% endif %}
 {% endblock %}
 """
@@ -192,13 +204,61 @@ form_tpl = """
 {% endblock %}
 """
 
-# Register templates with Flask's template loader using a dict loader trick
+compare_tpl = """
+{% extends 'layout' %}
+{% block content %}
+  <h1>Compare Products</h1>
+  {% if products|length < 2 %}
+    <p class="text-muted">Select at least two products to compare from the <a href="{{ url_for('index') }}">product list</a>.</p>
+  {% else %}
+    <div class="table-responsive">
+      <table class="table table-bordered text-center align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Attribute</th>
+            {% for p in products %}
+              <th>{{ p.name }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Image</td>
+            {% for p in products %}
+              <td>{% if p.image_url %}<img src="{{ p.image_url }}" style="max-height:100px;">{% else %}-{% endif %}</td>
+            {% endfor %}
+          </tr>
+          <tr>
+            <td>Category</td>
+            {% for p in products %}<td>{{ p.category or '-' }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>Description</td>
+            {% for p in products %}<td>{{ p.description or '-' }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>Price</td>
+            {% for p in products %}<td>€{{ p.price_display() }}</td>{% endfor %}
+          </tr>
+          <tr>
+            <td>Stock</td>
+            {% for p in products %}<td>{{ p.stock }}</td>{% endfor %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}
+"""
+
+# Register templates with Flask's template loader
 from jinja2 import DictLoader
 app.jinja_loader = DictLoader({
     'layout': layout,
     'index.html': index_tpl,
     'view.html': view_tpl,
     'form.html': form_tpl,
+    'compare.html': compare_tpl,
 })
 
 # --- Routes -----------------------------------------------------------------
@@ -230,7 +290,6 @@ def add_product():
         image_url = request.form.get('image_url', '').strip() or None
 
         try:
-            # Normalize price to cents
             price = Decimal(price_raw)
             price_cents = int((price * 100).quantize(Decimal('1')))
         except Exception:
@@ -288,7 +347,16 @@ def delete_product(product_id):
     flash('Product deleted')
     return redirect(url_for('index'))
 
-# --- API (simple JSON endpoints) --------------------------------------------
+@app.route('/compare')
+def compare():
+    ids = request.args.getlist('ids', type=int)
+    if not ids:
+        products = []
+    else:
+        products = Product.query.filter(Product.id.in_(ids)).all()
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'compare.html')[0], products=products)
+
+# --- API --------------------------------------------------------------------
 @app.route('/api/products')
 def api_products():
     products = Product.query.all()
@@ -308,7 +376,6 @@ def api_products():
     }
 
 if __name__ == '__main__':
-    # Create DB file location if needed
     os.makedirs(BASE_DIR, exist_ok=True)
     print('Starting app — database file:', DB_PATH)
     app.run(debug=True)

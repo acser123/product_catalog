@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS product_display_columns (
 );
 '''
 
+# Table to store config settings for the product view page
+VIEW_CONFIG_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product_view_config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+'''
+
+# Table to store which columns to display on the view page
+VIEW_DISPLAY_COLUMNS_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product_view_display_columns (
+    column_name TEXT PRIMARY KEY
+);
+'''
+
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
     """Establishes a connection to the SQLite database.
@@ -197,45 +212,25 @@ def record_field_versions(product_id, diffs, changed_by='web'):
                         (product_id, field, None if old is None else str(old), None if new is None else str(new), now, changed_by))
         conn.commit()
 
-def get_versions(product_id=None, limit=200, sort_by='id', order='desc'):
-    """Retrieivs version history for products.
+def get_versions(product_id=None, limit=200):
+    """Retrieves version history for products.
 
     Args:
         product_id (int, optional): If provided, filters versions for a specific product.
                                     Defaults to None.
         limit (int, optional): The maximum number of version records to return.
                                Defaults to 200.
-        sort_by (str, optional): The column to sort by. Defaults to 'id'.
-        order (str, optional): The sort order ('asc' or 'desc'). Defaults to 'desc'.
 
     Returns:
         list: A list of rows from the 'product_field_versions' table.
     """
     ensure_version_table()
-
-    # Get valid columns for sorting to prevent SQL injection
-    with get_sqlite_connection() as conn:
-        cur = conn.execute("PRAGMA table_info(product_field_versions)")
-        valid_columns = [row[1] for row in cur.fetchall()]
-
-    if sort_by not in valid_columns:
-        sort_by = 'id'  # Default to a safe column if invalid
-
-    order_sql = 'ASC' if order.lower() == 'asc' else 'DESC'
-
     with get_sqlite_connection() as conn:
         cur = conn.cursor()
-        sql_query = "SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions"
-        params = []
-
         if product_id:
-            sql_query += " WHERE product_id=?"
-            params.append(product_id)
-
-        sql_query += f" ORDER BY {sort_by} {order_sql} LIMIT ?"
-        params.append(limit)
-
-        cur.execute(sql_query, params)
+            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions WHERE product_id=? ORDER BY id DESC LIMIT ?", (product_id, limit))
+        else:
+            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions ORDER BY id DESC LIMIT ?", (limit,))
         rows = cur.fetchall()
     return rows
 
@@ -286,6 +281,8 @@ with app.app_context():
         # Also ensure the main product table exists with a default schema
         conn.execute(PRODUCT_TABLE_SQL)
         conn.execute(DISPLAY_COLUMNS_TABLE_SQL)
+        conn.execute(VIEW_CONFIG_TABLE_SQL)
+        conn.execute(VIEW_DISPLAY_COLUMNS_TABLE_SQL)
         conn.commit()
 
 # --- Templates --------------------------------------------------------------
@@ -380,43 +377,30 @@ index_tpl = """
 view_tpl = """
 {% extends 'layout' %}
 {% block content %}
-  <div class="row">
-    <div class="col-md-5">
-      {% if hasattr(product, 'image_url') and product.image_url %}
-        <img src="{{ product.image_url }}" alt="{{ getattr(product, 'name', 'Product image') }}" class="img-fluid rounded">
-      {% else %}
-        <div class="border rounded p-5 text-center text-muted">No image</div>
-      {% endif %}
-    </div>
-    <div class="col-md-7">
-      <h1>{{ getattr(product, 'name', 'Unnamed Product') }}</h1>
+  <h1>{{ getattr(product, title_field, 'Unnamed Product') }}</h1>
 
-      <dl class="row mt-4">
-        {% for col in cols %}
-          {% set col_name = col[1] %}
-          {% if col_name not in ['id', 'name', 'image_url'] %}
-            <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
-            <dd class="col-sm-8">
-              {% set value = getattr(product, col_name, None) %}
-              {% if value is not none %}
-                {% if col_name == 'price_cents' %}
-                  €{{ '%.2f'|format(value / 100.0) }}
-                {% else %}
-                  {{ value }}
-                {% endif %}
-              {% else %}
-                <span class="text-muted">N/A</span>
-              {% endif %}
-            </dd>
+  <dl class="row mt-4">
+    {% for col in cols %}
+      {% set col_name = col[1] %}
+      <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+      <dd class="col-sm-8">
+        {% set value = getattr(product, col_name, None) %}
+        {% if value is not none %}
+          {% if col_name == 'price_cents' %}
+            €{{ '%.2f'|format(value / 100.0) }}
+          {% else %}
+            {{ value }}
           {% endif %}
-        {% endfor %}
-      </dl>
+        {% else %}
+          <span class="text-muted">N/A</span>
+        {% endif %}
+      </dd>
+    {% endfor %}
+  </dl>
 
-      <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
-      <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
-      <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
-    </div>
-  </div>
+  <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+  <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
 {% endblock %}
 """
 
@@ -459,19 +443,49 @@ designer_tpl = """
 {% extends 'layout' %}
 {% block content %}
   <h1>Display Designer</h1>
-  <p class="text-muted">Select which columns to display on the Products page.</p>
+
   <form method="post">
+    <hr>
+    <h4>Product View Page Settings</h4>
+    <div class="mb-3">
+        <label for="title_field_select" class="form-label">Title Field</label>
+        <select class="form-select" name="title_field" id="title_field_select">
+            {% for col in all_columns %}
+                <option value="{{ col[1] }}" {% if col[1] == selected_title_field %}selected{% endif %}>
+                    {{ col[1].replace('_', ' ')|title }}
+                </option>
+            {% endfor %}
+        </select>
+        <div class="form-text">Select which field to use as the main title on the product detail page.</div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Attributes to Display</label>
+        {% for col in all_columns %}
+            {% if col[1] != 'image_url' %}
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="view_columns" value="{{ col[1] }}" id="view-col-{{ col[1] }}" {% if col[1] in selected_view_columns %}checked{% endif %}>
+                <label class="form-check-label" for="view-col-{{ col[1] }}">
+                    {{ col[1].replace('_', ' ')|title }}
+                </label>
+            </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <hr>
+    <h4>Product List Page Settings</h4>
+    <p class="text-muted">Select which columns to display on the main products grid.</p>
     <div class="mb-3">
       {% for col in all_columns %}
         <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="columns" value="{{ col[1] }}" id="col-{{ col[1] }}" {% if col[1] in selected_columns %}checked{% endif %}>
-          <label class="form-check-label" for="col-{{ col[1] }}">
+          <input class="form-check-input" type="checkbox" name="list_columns" value="{{ col[1] }}" id="list-col-{{ col[1] }}" {% if col[1] in selected_list_columns %}checked{% endif %}>
+          <label class="form-check-label" for="list-col-{{ col[1] }}">
             {{ col[1].replace('_', ' ')|title }}
           </label>
         </div>
       {% endfor %}
     </div>
-    <button class="btn btn-primary" type="submit">Save</button>
+    <button class="btn btn-primary" type="submit">Save Display Settings</button>
   </form>
 {% endblock %}
 """
@@ -585,6 +599,16 @@ schema_tpl = """
       <hr>
       <h4>Raw CREATE TABLE</h4>
       <pre>{{ create_sql }}</pre>
+
+      <hr>
+      <h4>Run SQL Script</h4>
+      <div class="alert alert-warning"><strong>Warning:</strong> Executing raw SQL can permanently alter or delete data. Use with extreme caution.</div>
+      <form method="post" action="{{ url_for('run_sql') }}">
+        <div class="mb-3">
+            <textarea name="sql_script" class="form-control" rows="5" placeholder="-- Your SQL script here..."></textarea>
+        </div>
+        <button class="btn btn-warning" type="submit">Run SQL</button>
+      </form>
     </div>
   </div>
 {% endblock %}
@@ -600,19 +624,7 @@ versions_tpl = """
     <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('versions') }}">Clear</a></div>
   </form>
   <table class="table table-sm table-bordered">
-    <thead>
-      <tr>
-        {% set new_order = 'asc' if order == 'desc' else 'desc' %}
-        <th><a href="{{ url_for('versions', sort_by='id', order=new_order if sort_by == 'id' else 'asc', product_id=request.args.get('product_id')) }}">ID {% if sort_by == 'id' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='product_id', order=new_order if sort_by == 'product_id' else 'asc', product_id=request.args.get('product_id')) }}">Product {% if sort_by == 'product_id' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='field_name', order=new_order if sort_by == 'field_name' else 'asc', product_id=request.args.get('product_id')) }}">Field {% if sort_by == 'field_name' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='old_value', order=new_order if sort_by == 'old_value' else 'asc', product_id=request.args.get('product_id')) }}">Old {% if sort_by == 'old_value' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='new_value', order=new_order if sort_by == 'new_value' else 'asc', product_id=request.args.get('product_id')) }}">New {% if sort_by == 'new_value' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='changed_at', order=new_order if sort_by == 'changed_at' else 'asc', product_id=request.args.get('product_id')) }}">When {% if sort_by == 'changed_at' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th><a href="{{ url_for('versions', sort_by='changed_by', order=new_order if sort_by == 'changed_by' else 'asc', product_id=request.args.get('product_id')) }}">By {% if sort_by == 'changed_by' %}{{ '▲' if order == 'asc' else '▼' }}{% endif %}</a></th>
-        <th>Actions</th>
-      </tr>
-    </thead>
+    <thead><tr><th>ID</th><th>Product</th><th>Field</th><th>Old</th><th>New</th><th>When</th><th>By</th><th>Actions</th></tr></thead>
     <tbody>
       {% for v in versions %}
         <tr>
@@ -731,14 +743,38 @@ def view_product(product_id):
 
     product = SimpleNamespace(**dict(row))
 
+    with get_sqlite_connection() as conn:
+        # Fetch the configured title field
+        cur = conn.execute("SELECT value FROM product_view_config WHERE key = 'title_field'")
+        title_field_row = cur.fetchone()
+        title_field = title_field_row[0] if title_field_row else 'name'
+
+        # Fetch the columns to display for the attribute list
+        cur = conn.execute("SELECT column_name FROM product_view_display_columns")
+        selected_cols = [r[0] for r in cur.fetchall()]
+
+    all_cols_info = get_table_info('product')
+
+    # Exclude special columns that are handled differently in the template
+    special_cols = ['id', title_field]
+
+    if selected_cols:
+        # If designer is configured, show the intersection of selected columns and non-special columns
+        cols_to_display = [c for c in all_cols_info if c[1] in selected_cols and c[1] not in special_cols]
+    else:
+        # If designer is not configured, show all non-special columns (original behavior)
+        # Also exclude image_url here in the default case, since it's not in the new designer checklist
+        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols and c[1] != 'image_url']
+
+
     # Helper to safely get attributes, especially for templates
     def _getattr(obj, key, default=''):
         return getattr(obj, key, default)
 
-    cols_info = get_table_info('product')
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0],
                                   product=product,
-                                  cols=cols_info,
+                                  title_field=title_field,
+                                  cols=cols_to_display,
                                   getattr=_getattr)
 
 @app.route('/add', methods=['GET', 'POST'])
@@ -986,21 +1022,54 @@ def display_designer():
     all_columns = get_table_info('product')
 
     if request.method == 'POST':
-        selected = request.form.getlist('columns')
+        # Handle product list columns
+        selected_list_cols = request.form.getlist('list_columns')
         with get_sqlite_connection() as conn:
             cur = conn.cursor()
             cur.execute("DELETE FROM product_display_columns")
-            for col_name in selected:
+            for col_name in selected_list_cols:
                 cur.execute("INSERT INTO product_display_columns (column_name) VALUES (?)", (col_name,))
             conn.commit()
+
+        # Handle product view columns
+        selected_view_cols = request.form.getlist('view_columns')
+        with get_sqlite_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM product_view_display_columns")
+            for col_name in selected_view_cols:
+                cur.execute("INSERT INTO product_view_display_columns (column_name) VALUES (?)", (col_name,))
+            conn.commit()
+
+        # Handle product view title field
+        title_field = request.form.get('title_field')
+        if title_field:
+            with get_sqlite_connection() as conn:
+                conn.execute("INSERT OR REPLACE INTO product_view_config (key, value) VALUES (?, ?)", ('title_field', title_field))
+                conn.commit()
+
         flash('Display preferences updated')
         return redirect(url_for('display_designer'))
 
+    # GET request
     with get_sqlite_connection() as conn:
+        # Fetch selected columns for product list
         cur = conn.execute("SELECT column_name FROM product_display_columns")
-        selected_columns = [row[0] for row in cur.fetchall()]
+        selected_list_columns = [row[0] for row in cur.fetchall()]
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0], all_columns=all_columns, selected_columns=selected_columns)
+        # Fetch selected columns for product view
+        cur = conn.execute("SELECT column_name FROM product_view_display_columns")
+        selected_view_columns = [row[0] for row in cur.fetchall()]
+
+        # Fetch selected title field for product view
+        cur = conn.execute("SELECT value FROM product_view_config WHERE key = 'title_field'")
+        row = cur.fetchone()
+        selected_title_field = row[0] if row else 'name'
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0],
+                                  all_columns=all_columns,
+                                  selected_list_columns=selected_list_columns,
+                                  selected_view_columns=selected_view_columns,
+                                  selected_title_field=selected_title_field)
 
 # --- Schema designer routes -----------------------------------------------
 @app.route('/schema')
@@ -1073,6 +1142,24 @@ def modify_column():
         flash(f'Error modifying column: {e}')
     return redirect(url_for('schema'))
 
+@app.route('/schema/run-sql', methods=['POST'])
+def run_sql():
+    """Executes a raw SQL script against the database."""
+    sql_script = request.form.get('sql_script', '').strip()
+    if not sql_script:
+        flash('No SQL script provided.')
+        return redirect(url_for('schema'))
+
+    try:
+        with get_sqlite_connection() as conn:
+            conn.executescript(sql_script)
+            conn.commit()
+        flash('SQL script executed successfully.')
+    except sqlite3.Error as e:
+        flash(f'Error executing SQL script: {e}')
+
+    return redirect(url_for('schema'))
+
 # --- Versions GUI routes --------------------------------------------------
 @app.route('/versions')
 def versions():
@@ -1084,13 +1171,8 @@ def versions():
         str: Rendered HTML of the versions page.
     """
     pid = request.args.get('product_id', type=int)
-    sort_by = request.args.get('sort_by', 'id')
-    order = request.args.get('order', 'desc')
-    versions = get_versions(product_id=pid, limit=500, sort_by=sort_by, order=order)
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0],
-                                  versions=versions,
-                                  sort_by=sort_by,
-                                  order=order)
+    versions = get_versions(product_id=pid, limit=500)
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0], versions=versions)
 
 @app.route('/version/<int:vid>')
 def version_view(vid):

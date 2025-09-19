@@ -459,6 +459,14 @@ designer_tpl = """
 {% block content %}
   <h1>Display Designer</h1>
 
+  <div class="d-flex justify-content-end align-items-center mb-3">
+    <div class="btn-group btn-group-sm">
+        <a href="{{ url_for('display_designer', sort='asc') }}" class="btn btn-outline-secondary">Sort A-Z</a>
+        <a href="{{ url_for('display_designer', sort='desc') }}" class="btn btn-outline-secondary">Sort Z-A</a>
+        <a href="{{ url_for('display_designer') }}" class="btn btn-outline-secondary">Clear Sort</a>
+    </div>
+  </div>
+
   <form method="post">
     <hr>
     <h4>Product View Page Settings</h4>
@@ -1051,6 +1059,12 @@ def compare():
 @app.route('/display-designer', methods=['GET', 'POST'])
 def display_designer():
     all_columns = get_table_info('product')
+    sort_order = request.args.get('sort')
+
+    if sort_order == 'asc':
+        all_columns.sort(key=lambda x: x[1])
+    elif sort_order == 'desc':
+        all_columns.sort(key=lambda x: x[1], reverse=True)
 
     if request.method == 'POST':
         # Handle product list columns
@@ -1079,7 +1093,9 @@ def display_designer():
                 conn.commit()
 
         flash('Display preferences updated')
-        return redirect(url_for('display_designer'))
+        # Preserve sort order on redirect
+        redirect_url = url_for('display_designer', sort=sort_order) if sort_order else url_for('display_designer')
+        return redirect(redirect_url)
 
     # GET request
     with get_sqlite_connection() as conn:

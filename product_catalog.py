@@ -51,6 +51,7 @@ DISPLAY_COLUMNS_TABLE_SQL = '''
 CREATE TABLE IF NOT EXISTS product_display_columns (
     column_name TEXT NOT NULL,
     display_order INTEGER,
+    is_displayed INTEGER DEFAULT 1,
     PRIMARY KEY (column_name)
 );
 '''
@@ -68,6 +69,7 @@ VIEW_DISPLAY_COLUMNS_TABLE_SQL = '''
 CREATE TABLE IF NOT EXISTS product_view_display_columns (
     column_name TEXT NOT NULL,
     display_order INTEGER,
+    is_displayed INTEGER DEFAULT 1,
     PRIMARY KEY (column_name)
 );
 '''
@@ -294,7 +296,7 @@ def rollback_version(vid, performer='web'):
 # --- Database Initialization --------------------------------------------------
 with app.app_context():
     with get_sqlite_connection() as conn:
-        # First, run migrations if necessary for display order
+        # First, run migrations if necessary
         for table_name in ['product_display_columns', 'product_view_display_columns']:
             if table_exists(conn, table_name):
                 cur = conn.execute(f"PRAGMA table_info({table_name})")
@@ -306,6 +308,8 @@ with app.app_context():
                     rows_to_update = cur.fetchall()
                     for i, row in enumerate(rows_to_update):
                         conn.execute("UPDATE {} SET display_order = ? WHERE column_name = ?".format(table_name), (i, row['column_name']))
+                if 'is_displayed' not in columns:
+                    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN is_displayed INTEGER DEFAULT 1")
 
         conn.execute(VERSION_TABLE_SQL)
         # Also ensure the main product table exists with a default schema
@@ -489,17 +493,16 @@ designer_tpl = """
 {% block content %}
   <h1>Display Designer</h1>
 
-  <div class="d-flex justify-content-end align-items-center mb-3">
-    <div class="btn-group btn-group-sm">
-        <a href="{{ url_for('display_designer', sort='asc') }}" class="btn btn-outline-secondary">Sort A-Z</a>
-        <a href="{{ url_for('display_designer', sort='desc') }}" class="btn btn-outline-secondary">Sort Z-A</a>
-        <a href="{{ url_for('display_designer') }}" class="btn btn-outline-secondary">Clear Sort</a>
-    </div>
-  </div>
-
   <form method="post">
     <hr>
-    <h4>Product View Page Settings</h4>
+    <div class="d-flex justify-content-between align-items-center">
+        <h4>Product View Page Settings</h4>
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('display_designer', view_sort='asc', list_sort=request.args.get('list_sort')) }}" class="btn btn-outline-secondary">Sort A-Z</a>
+            <a href="{{ url_for('display_designer', view_sort='desc', list_sort=request.args.get('list_sort')) }}" class="btn btn-outline-secondary">Sort Z-A</a>
+            <a href="{{ url_for('display_designer', list_sort=request.args.get('list_sort')) }}" class="btn btn-outline-secondary">Clear Sort</a>
+        </div>
+    </div>
     <div class="mb-3">
         <label for="title_field_select" class="form-label">Title Field</label>
         <select class="form-select" name="title_field" id="title_field_select">
@@ -531,7 +534,14 @@ designer_tpl = """
     </div>
 
     <hr>
-    <h4>Product List Page Settings</h4>
+    <div class="d-flex justify-content-between align-items-center">
+        <h4>Product List Page Settings</h4>
+        <div class="btn-group btn-group-sm">
+            <a href="{{ url_for('display_designer', list_sort='asc', view_sort=request.args.get('view_sort')) }}" class="btn btn-outline-secondary">Sort A-Z</a>
+            <a href="{{ url_for('display_designer', list_sort='desc', view_sort=request.args.get('view_sort')) }}" class="btn btn-outline-secondary">Sort Z-A</a>
+            <a href="{{ url_for('display_designer', view_sort=request.args.get('view_sort')) }}" class="btn btn-outline-secondary">Clear Sort</a>
+        </div>
+    </div>
     <p class="text-muted">Select which columns to display on the main products grid (drag to reorder).</p>
     <div class="mb-3">
         <ul id="list-cols-sortable" class="list-group">
@@ -808,7 +818,7 @@ def index():
 
     # Get the columns to display from the designer settings
     with get_sqlite_connection() as conn:
-        cur = conn.execute("SELECT column_name FROM product_display_columns ORDER BY display_order")
+        cur = conn.execute("SELECT column_name FROM product_display_columns WHERE is_displayed = 1 ORDER BY display_order")
         col_names = [row[0] for row in cur.fetchall()]
 
     # If no columns are selected, default to the first two
@@ -847,7 +857,7 @@ def view_product(product_id):
         title_field = title_field_row[0] if title_field_row else 'name'
 
         # Fetch the columns to display for the attribute list
-        cur = conn.execute("SELECT column_name FROM product_view_display_columns ORDER BY display_order")
+        cur = conn.execute("SELECT column_name FROM product_view_display_columns WHERE is_displayed = 1 ORDER BY display_order")
         selected_cols = [r[0] for r in cur.fetchall()]
 
     all_cols_info = get_table_info('product')
@@ -1114,34 +1124,54 @@ def compare():
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'compare.html')[0], products=products, cols=cols_for_table, getattr=getattr)
 
 # --- Display designer routes ----------------------------------------------
+def sync_display_columns(conn, table_name, all_column_names):
+    """Ensure all columns from product table are in the display config table."""
+    cur = conn.cursor()
+    cur.execute(f"SELECT column_name FROM {table_name}")
+    existing = [row[0] for row in cur.fetchall()]
+
+    # Add new columns that are not in the config table yet
+    for col_name in all_column_names:
+        if col_name not in existing:
+            # Add to the end of the order
+            cur.execute(f"SELECT MAX(display_order) FROM {table_name}")
+            max_order = cur.fetchone()[0]
+            next_order = (max_order or -1) + 1
+            cur.execute(f"INSERT INTO {table_name} (column_name, display_order, is_displayed) VALUES (?, ?, ?)",
+                        (col_name, next_order, 1))
+    conn.commit()
+
 @app.route('/display-designer', methods=['GET', 'POST'])
 def display_designer():
     all_columns_info = get_table_info('product')
     all_column_names = [c[1] for c in all_columns_info]
-    sort_order = request.args.get('sort')
+
+    view_sort = request.args.get('view_sort')
+    list_sort = request.args.get('list_sort')
+
+    with get_sqlite_connection() as conn:
+        sync_display_columns(conn, 'product_display_columns', all_column_names)
+        sync_display_columns(conn, 'product_view_display_columns', all_column_names)
 
     if request.method == 'POST':
-        # Handle product list columns
-        ordered_list_cols = request.form.getlist('list_columns')
-        checked_list_cols = request.form.getlist('list_columns_checked')
         with get_sqlite_connection() as conn:
             cur = conn.cursor()
-            cur.execute("DELETE FROM product_display_columns")
+            # Handle product list columns
+            ordered_list_cols = request.form.getlist('list_columns')
+            checked_list_cols = request.form.getlist('list_columns_checked')
             for i, col_name in enumerate(ordered_list_cols):
-                if col_name in checked_list_cols:
-                    cur.execute("INSERT INTO product_display_columns (column_name, display_order) VALUES (?, ?)", (col_name, i))
-            conn.commit()
+                is_displayed = 1 if col_name in checked_list_cols else 0
+                cur.execute("UPDATE product_display_columns SET display_order = ?, is_displayed = ? WHERE column_name = ?",
+                            (i, is_displayed, col_name))
 
-        # Handle product view columns
-        ordered_view_cols = request.form.getlist('view_columns')
-        with get_sqlite_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM product_view_display_columns")
-            # Only save the checked items
+            # Handle product view columns
+            ordered_view_cols = request.form.getlist('view_columns')
             checked_view_cols = request.form.getlist('view_columns_checked')
             for i, col_name in enumerate(ordered_view_cols):
-                if col_name in checked_view_cols:
-                    cur.execute("INSERT INTO product_view_display_columns (column_name, display_order) VALUES (?, ?)", (col_name, i))
+                is_displayed = 1 if col_name in checked_view_cols else 0
+                cur.execute("UPDATE product_view_display_columns SET display_order = ?, is_displayed = ? WHERE column_name = ?",
+                            (i, is_displayed, col_name))
+
             conn.commit()
 
         # Handle product view title field
@@ -1152,49 +1182,45 @@ def display_designer():
                 conn.commit()
 
         flash('Display preferences updated')
-        redirect_url = url_for('display_designer', sort=sort_order) if sort_order else url_for('display_designer')
+        redirect_url = url_for('display_designer', view_sort=view_sort, list_sort=list_sort)
         return redirect(redirect_url)
 
     # GET request
     with get_sqlite_connection() as conn:
         # Fetch ordered columns for product list
-        cur = conn.execute("SELECT column_name FROM product_display_columns ORDER BY display_order")
-        ordered_list_columns = [row[0] for row in cur.fetchall()]
+        cur = conn.execute("SELECT column_name, is_displayed FROM product_display_columns ORDER BY display_order")
+        list_page_cols_data = cur.fetchall()
+        list_page_cols = [row[0] for row in list_page_cols_data]
+        selected_list_columns = [row[0] for row in list_page_cols_data if row[1]]
 
         # Fetch ordered columns for product view
-        cur = conn.execute("SELECT column_name FROM product_view_display_columns ORDER BY display_order")
-        ordered_view_columns = [row[0] for row in cur.fetchall()]
+        cur = conn.execute("SELECT column_name, is_displayed FROM product_view_display_columns ORDER BY display_order")
+        view_page_cols_data = cur.fetchall()
+        view_page_cols = [row[0] for row in view_page_cols_data]
+        selected_view_columns = [row[0] for row in view_page_cols_data if row[1]]
 
         # Fetch selected title field for product view
         cur = conn.execute("SELECT value FROM product_view_config WHERE key = 'title_field'")
         row = cur.fetchone()
         selected_title_field = row[0] if row else 'name'
 
-    # Combine saved and new columns for a full list
-    def get_combined_column_list(saved_cols, all_cols):
-        combined = list(saved_cols)
-        for col in all_cols:
-            if col not in combined:
-                combined.append(col)
-        return combined
-
-    list_page_cols = get_combined_column_list(ordered_list_columns, all_column_names)
-    view_page_cols = get_combined_column_list(ordered_view_columns, all_column_names)
-
     # Alphabetical sort if requested
-    if sort_order == 'asc':
-        list_page_cols.sort()
+    if view_sort == 'asc':
         view_page_cols.sort()
-    elif sort_order == 'desc':
-        list_page_cols.sort(reverse=True)
+    elif view_sort == 'desc':
         view_page_cols.sort(reverse=True)
+
+    if list_sort == 'asc':
+        list_page_cols.sort()
+    elif list_sort == 'desc':
+        list_page_cols.sort(reverse=True)
 
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0],
                                   all_columns=all_columns_info,
                                   list_page_cols=list_page_cols,
                                   view_page_cols=view_page_cols,
-                                  selected_list_columns=ordered_list_columns,
-                                  selected_view_columns=ordered_view_columns,
+                                  selected_list_columns=selected_list_columns,
+                                  selected_view_columns=selected_view_columns,
                                   selected_title_field=selected_title_field)
 
 # --- Schema designer routes -----------------------------------------------

@@ -197,7 +197,7 @@ def record_field_versions(product_id, diffs, changed_by='web'):
                         (product_id, field, None if old is None else str(old), None if new is None else str(new), now, changed_by))
         conn.commit()
 
-def get_versions(product_id=None, limit=200, sort_by='id', order='desc'):
+def get_versions(product_id=None, limit=200):
     """Retrieves version history for products.
 
     Args:
@@ -205,34 +205,17 @@ def get_versions(product_id=None, limit=200, sort_by='id', order='desc'):
                                     Defaults to None.
         limit (int, optional): The maximum number of version records to return.
                                Defaults to 200.
-        sort_by (str, optional): The column to sort by. Defaults to 'id'.
-        order (str, optional): The sort order ('asc' or 'desc'). Defaults to 'desc'.
 
     Returns:
         list: A list of rows from the 'product_field_versions' table.
     """
     ensure_version_table()
-
-    valid_columns = ['id', 'product_id', 'field_name', 'old_value', 'new_value', 'changed_at', 'changed_by']
-    if sort_by not in valid_columns:
-        sort_by = 'id'
-
-    order_sql = 'ASC' if order.lower() == 'asc' else 'DESC'
-
     with get_sqlite_connection() as conn:
         cur = conn.cursor()
-
-        sql_query = "SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions"
-        params = []
-
         if product_id:
-            sql_query += " WHERE product_id=?"
-            params.append(product_id)
-
-        sql_query += f" ORDER BY {sort_by} {order_sql} LIMIT ?"
-        params.append(limit)
-
-        cur.execute(sql_query, params)
+            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions WHERE product_id=? ORDER BY id DESC LIMIT ?", (product_id, limit))
+        else:
+            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions ORDER BY id DESC LIMIT ?", (limit,))
         rows = cur.fetchall()
     return rows
 
@@ -377,41 +360,32 @@ index_tpl = """
 view_tpl = """
 {% extends 'layout' %}
 {% block content %}
-  <div class="row">
-    <div class="col-md-5">
-      {% if hasattr(product, 'image_url') and product.image_url %}
-        <img src="{{ product.image_url }}" alt="{{ getattr(product, 'name', 'Product image') }}" class="img-fluid rounded">
-      {% else %}
-        <div class="border rounded p-5 text-center text-muted">No image</div>
-      {% endif %}
-    </div>
-    <div class="col-md-7">
-      <h1>{{ getattr(product, 'name', 'Unnamed Product') }}</h1>
+  <h1>{{ getattr(product, 'name', 'Unnamed Product') }}</h1>
 
-      <dl class="row mt-4">
-        {% for col in cols %}
-          {% set col_name = col[1] %}
-          <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
-          <dd class="col-sm-8">
-            {% set value = getattr(product, col_name, None) %}
-            {% if value is not none %}
-              {% if col_name == 'price_cents' %}
-                €{{ '%.2f'|format(value / 100.0) }}
-              {% else %}
-                {{ value }}
-              {% endif %}
+  <dl class="row mt-4">
+    {% for col in cols %}
+      {% set col_name = col[1] %}
+      {% if col_name not in ['id', 'name', 'image_url'] %}
+        <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+        <dd class="col-sm-8">
+          {% set value = getattr(product, col_name, None) %}
+          {% if value is not none %}
+            {% if col_name == 'price_cents' %}
+              €{{ '%.2f'|format(value / 100.0) }}
             {% else %}
-              <span class="text-muted">N/A</span>
+              {{ value }}
             {% endif %}
-          </dd>
-        {% endfor %}
-      </dl>
+          {% else %}
+            <span class="text-muted">N/A</span>
+          {% endif %}
+        </dd>
+      {% endif %}
+    {% endfor %}
+  </dl>
 
-      <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
-      <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
-      <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
-    </div>
-  </div>
+  <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+  <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
 {% endblock %}
 """
 
@@ -595,22 +569,7 @@ versions_tpl = """
     <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('versions') }}">Clear</a></div>
   </form>
   <table class="table table-sm table-bordered">
-    <thead>
-      <tr>
-        {% set columns = [('id', 'ID'), ('product_id', 'Product'), ('field_name', 'Field'), ('old_value', 'Old'), ('new_value', 'New'), ('changed_at', 'When'), ('changed_by', 'By')] %}
-        {% for col, display in columns %}
-          <th>
-            <a href="{{ url_for('versions', sort=col, order='asc' if sort_by==col and order=='desc' else 'desc', product_id=request.args.get('product_id','')) }}" style="text-decoration: none; color: inherit;">
-              {{ display }}
-              {% if sort_by == col %}
-                <span style="float: right;">{{ ('&darr;' if order == 'desc' else '&uarr;') | safe }}</span>
-              {% endif %}
-            </a>
-          </th>
-        {% endfor %}
-        <th>Actions</th>
-      </tr>
-    </thead>
+    <thead><tr><th>ID</th><th>Product</th><th>Field</th><th>Old</th><th>New</th><th>When</th><th>By</th><th>Actions</th></tr></thead>
     <tbody>
       {% for v in versions %}
         <tr>
@@ -729,31 +688,14 @@ def view_product(product_id):
 
     product = SimpleNamespace(**dict(row))
 
-    # Get configured columns from the designer
-    with get_sqlite_connection() as conn:
-        cur = conn.execute("SELECT column_name FROM product_display_columns")
-        selected_cols = [row[0] for row in cur.fetchall()]
-
-    all_cols_info = get_table_info('product')
-
-    # These are always handled specially by the template, so exclude them from the main attribute list.
-    special_cols = ['id', 'name', 'image_url']
-
-    if selected_cols:
-        # If designer is configured, show the intersection of selected columns and non-special columns
-        cols_to_display = [c for c in all_cols_info if c[1] in selected_cols and c[1] not in special_cols]
-    else:
-        # If designer is not configured, show all non-special columns (original behavior)
-        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols]
-
-
     # Helper to safely get attributes, especially for templates
     def _getattr(obj, key, default=''):
         return getattr(obj, key, default)
 
+    cols_info = get_table_info('product')
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0],
                                   product=product,
-                                  cols=cols_to_display,
+                                  cols=cols_info,
                                   getattr=_getattr)
 
 @app.route('/add', methods=['GET', 'POST'])
@@ -1098,15 +1040,9 @@ def versions():
     Returns:
         str: Rendered HTML of the versions page.
     """
-    sort_by = request.args.get('sort', 'id')
-    order = request.args.get('order', 'desc')
     pid = request.args.get('product_id', type=int)
-
-    versions_data = get_versions(product_id=pid, limit=500, sort_by=sort_by, order=order)
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0],
-                                  versions=versions_data,
-                                  sort_by=sort_by,
-                                  order=order)
+    versions = get_versions(product_id=pid, limit=500)
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0], versions=versions)
 
 @app.route('/version/<int:vid>')
 def version_view(vid):

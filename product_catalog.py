@@ -599,6 +599,16 @@ schema_tpl = """
       <hr>
       <h4>Raw CREATE TABLE</h4>
       <pre>{{ create_sql }}</pre>
+
+      <hr>
+      <h4>Run SQL Script</h4>
+      <div class="alert alert-warning"><strong>Warning:</strong> Executing raw SQL can permanently alter or delete data. Use with extreme caution.</div>
+      <form method="post" action="{{ url_for('run_sql') }}">
+        <div class="mb-3">
+            <textarea name="sql_script" class="form-control" rows="5" placeholder="-- Your SQL script here..."></textarea>
+        </div>
+        <button class="btn btn-warning" type="submit">Run SQL</button>
+      </form>
     </div>
   </div>
 {% endblock %}
@@ -1130,6 +1140,24 @@ def modify_column():
         flash(f'Modified column {col_old} -> {col_new} ({col_type})')
     except Exception as e:
         flash(f'Error modifying column: {e}')
+    return redirect(url_for('schema'))
+
+@app.route('/schema/run-sql', methods=['POST'])
+def run_sql():
+    """Executes a raw SQL script against the database."""
+    sql_script = request.form.get('sql_script', '').strip()
+    if not sql_script:
+        flash('No SQL script provided.')
+        return redirect(url_for('schema'))
+
+    try:
+        with get_sqlite_connection() as conn:
+            conn.executescript(sql_script)
+            conn.commit()
+        flash('SQL script executed successfully.')
+    except sqlite3.Error as e:
+        flash(f'Error executing SQL script: {e}')
+
     return redirect(url_for('schema'))
 
 # --- Versions GUI routes --------------------------------------------------

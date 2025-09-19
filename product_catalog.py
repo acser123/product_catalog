@@ -320,16 +320,8 @@ index_tpl = """
         {% for p in products %}
           <div class="col">
             <div class="card h-100">
-              {% if hasattr(p, 'image_url') and p.image_url %}
-                <img src="{{ p.image_url }}" class="card-img-top" alt="{{ getattr(p, 'name', 'Product image') }}" style="height:200px;object-fit:cover;">
-              {% endif %}
               <div class="card-body">
-                <h5 class="card-title">{{ getattr(p, 'name', 'Unnamed Product') }}</h5>
-                <h6 class="card-subtitle mb-2 text-muted">{{ getattr(p, 'category', 'Uncategorized') }}</h6>
-                <p class="card-text">
-                  {% set desc = getattr(p, 'description', '') %}
-                  {{ desc[:140] if desc else '' }}{% if desc and desc|length > 140 %}…{% endif %}
-                </p>
+                <h5 class="card-title">{{ getattr(p, 'Vendor_name', 'Unnamed Vendor') }}</h5>
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}">
                   <label class="form-check-label">Compare</label>
@@ -337,9 +329,7 @@ index_tpl = """
               </div>
               <div class="card-footer d-flex justify-content-between align-items-center">
                 <strong class="me-2">
-                  {% if hasattr(p, 'price_cents') %}
-                    €{{ '%.2f'|format(p.price_cents / 100.0 if p.price_cents else 0) }}
-                  {% endif %}
+
                 </strong>
                 <div>
                   <a class="btn btn-sm btn-primary" href="{{ url_for('view_product', product_id=p.id) }}">View</a>

@@ -197,7 +197,7 @@ def record_field_versions(product_id, diffs, changed_by='web'):
                         (product_id, field, None if old is None else str(old), None if new is None else str(new), now, changed_by))
         conn.commit()
 
-def get_versions(product_id=None, limit=200):
+def get_versions(product_id=None, limit=200, sort_by='id', order='desc'):
     """Retrieves version history for products.
 
     Args:
@@ -205,17 +205,34 @@ def get_versions(product_id=None, limit=200):
                                     Defaults to None.
         limit (int, optional): The maximum number of version records to return.
                                Defaults to 200.
+        sort_by (str, optional): The column to sort by. Defaults to 'id'.
+        order (str, optional): The sort order ('asc' or 'desc'). Defaults to 'desc'.
 
     Returns:
         list: A list of rows from the 'product_field_versions' table.
     """
     ensure_version_table()
+
+    valid_columns = ['id', 'product_id', 'field_name', 'old_value', 'new_value', 'changed_at', 'changed_by']
+    if sort_by not in valid_columns:
+        sort_by = 'id'
+
+    order_sql = 'ASC' if order.lower() == 'asc' else 'DESC'
+
     with get_sqlite_connection() as conn:
         cur = conn.cursor()
+
+        sql_query = "SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions"
+        params = []
+
         if product_id:
-            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions WHERE product_id=? ORDER BY id DESC LIMIT ?", (product_id, limit))
-        else:
-            cur.execute("SELECT id, product_id, field_name, old_value, new_value, changed_at, changed_by FROM product_field_versions ORDER BY id DESC LIMIT ?", (limit,))
+            sql_query += " WHERE product_id=?"
+            params.append(product_id)
+
+        sql_query += f" ORDER BY {sort_by} {order_sql} LIMIT ?"
+        params.append(limit)
+
+        cur.execute(sql_query, params)
         rows = cur.fetchall()
     return rows
 
@@ -580,7 +597,22 @@ versions_tpl = """
     <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('versions') }}">Clear</a></div>
   </form>
   <table class="table table-sm table-bordered">
-    <thead><tr><th>ID</th><th>Product</th><th>Field</th><th>Old</th><th>New</th><th>When</th><th>By</th><th>Actions</th></tr></thead>
+    <thead>
+      <tr>
+        {% set columns = [('id', 'ID'), ('product_id', 'Product'), ('field_name', 'Field'), ('old_value', 'Old'), ('new_value', 'New'), ('changed_at', 'When'), ('changed_by', 'By')] %}
+        {% for col, display in columns %}
+          <th>
+            <a href="{{ url_for('versions', sort=col, order='asc' if sort_by==col and order=='desc' else 'desc', product_id=request.args.get('product_id','')) }}" style="text-decoration: none; color: inherit;">
+              {{ display }}
+              {% if sort_by == col %}
+                <span style="float: right;">{{ '&#9660;' if order == 'desc' else '&#9650;' }}</span>
+              {% endif %}
+            </a>
+          </th>
+        {% endfor %}
+        <th>Actions</th>
+      </tr>
+    </thead>
     <tbody>
       {% for v in versions %}
         <tr>
@@ -1051,9 +1083,15 @@ def versions():
     Returns:
         str: Rendered HTML of the versions page.
     """
+    sort_by = request.args.get('sort', 'id')
+    order = request.args.get('order', 'desc')
     pid = request.args.get('product_id', type=int)
-    versions = get_versions(product_id=pid, limit=500)
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0], versions=versions)
+
+    versions_data = get_versions(product_id=pid, limit=500, sort_by=sort_by, order=order)
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0],
+                                  versions=versions_data,
+                                  sort_by=sort_by,
+                                  order=order)
 
 @app.route('/version/<int:vid>')
 def version_view(vid):

@@ -637,10 +637,11 @@ schema_tpl = """
   <div class="row">
     <div class="col-md-6">
       <h4>Current Columns</h4>
-      <table class="table table-sm">
-        <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
-        <tbody>
-          {% for col in cols %}
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for col in cols %}
             <tr>
               <td>{{ col[1] }}</td>
               <td>{{ col[2] }}</td>
@@ -677,6 +678,7 @@ schema_tpl = """
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
     <div class="col-md-6">
       <h4>Add Column</h4>

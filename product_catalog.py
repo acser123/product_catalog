@@ -39,11 +39,25 @@ CREATE TABLE IF NOT EXISTS product_field_versions (
 
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
+    """Establishes a connection to the SQLite database.
+
+    Returns:
+        sqlite3.Connection: A connection object to the database.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def get_table_info(table_name='product'):
+    """Retrieves schema information for a given table.
+
+    Args:
+        table_name (str): The name of the table to inspect.
+
+    Returns:
+        list: A list of tuples, where each tuple describes a column
+              (cid, name, type, notnull, dflt_value, pk).
+    """
     # Return list of (cid, name, type, notnull, dflt_value, pk)
     with get_sqlite_connection() as conn:
         cur = conn.execute(f"PRAGMA table_info({table_name})")
@@ -51,16 +65,43 @@ def get_table_info(table_name='product'):
     return rows
 
 def get_create_table_sql(table_name='product'):
+    """Fetches the 'CREATE TABLE' SQL statement for a table.
+
+    Args:
+        table_name (str): The name of the table.
+
+    Returns:
+        str: The SQL 'CREATE TABLE' statement, or None if the table doesn't exist.
+    """
     with get_sqlite_connection() as conn:
         cur = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
         row = cur.fetchone()
     return row[0] if row else None
 
 def sanitize_identifier(name):
+    """Sanitizes a string to be a valid SQL identifier.
+
+    Replaces any character that is not a number, letter, or underscore
+    with an underscore.
+
+    Args:
+        name (str): The identifier to sanitize.
+
+    Returns:
+        str: The sanitized identifier.
+    """
     # very simple sanitizer for SQL identifiers (columns/table)
     return re.sub(r'[^0-9A-Za-z_]', '_', name)
 
 def add_column_sqlite(table_name, column_name, column_type, default=None):
+    """Adds a new column to a table in the SQLite database.
+
+    Args:
+        table_name (str): The name of the table to modify.
+        column_name (str): The name of the new column.
+        column_type (str): The data type of the new column (e.g., 'TEXT', 'INTEGER').
+        default (str, optional): The default value for the new column. Defaults to None.
+    """
     column_name = sanitize_identifier(column_name)
     sql_type = column_type.upper()
     sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}"
@@ -71,6 +112,15 @@ def add_column_sqlite(table_name, column_name, column_type, default=None):
         conn.commit()
 
 def recreate_table_with_schema(table_name, new_columns):
+    """Recreates a table with a new schema, preserving data from common columns.
+
+    This is used to perform operations not directly supported by ALTER TABLE in SQLite,
+    such as dropping a column or changing a column's type.
+
+    Args:
+        table_name (str): The name of the table to recreate.
+        new_columns (list): A list of tuples, where each tuple is (name, type, default).
+    """
     # new_columns: list of tuples (name, type, dflt)
     # Steps: create temp table, copy matching columns, drop old, rename temp
     temp_name = f"{table_name}_new"
@@ -91,8 +141,8 @@ def recreate_table_with_schema(table_name, new_columns):
         cur.execute(f"PRAGMA table_info({table_name})")
         old_info = cur.fetchall()
         old_cols = [r[1] for r in old_info]
-        new_cols = [name for name,_,_ in new_columns]
-        common = [c for c in new_cols if c in old_cols]
+        new_cols_names = [name for name, _, _ in new_columns]
+        common = [c for c in new_cols_names if c in old_cols]
 
         if common:
             common_cols_sql = ",".join(common)
@@ -104,11 +154,21 @@ def recreate_table_with_schema(table_name, new_columns):
 
 # --- Versioning helpers -----------------------------------------------------
 def ensure_version_table():
+    """Ensures the 'product_field_versions' table exists in the database."""
     with get_sqlite_connection() as conn:
         conn.execute(VERSION_TABLE_SQL)
         conn.commit()
 
 def record_field_versions(product_id, diffs, changed_by='web'):
+    """Records changes to product fields in the versioning table.
+
+    Args:
+        product_id (int): The ID of the product that was changed.
+        diffs (list): A list of tuples, each representing a change.
+                      Format: (field_name, old_value, new_value).
+        changed_by (str, optional): Identifier for who made the change.
+                                    Defaults to 'web'.
+    """
     # diffs: list of (field, old, new)
     if not diffs:
         return
@@ -122,6 +182,17 @@ def record_field_versions(product_id, diffs, changed_by='web'):
         conn.commit()
 
 def get_versions(product_id=None, limit=200):
+    """Retrieves version history for products.
+
+    Args:
+        product_id (int, optional): If provided, filters versions for a specific product.
+                                    Defaults to None.
+        limit (int, optional): The maximum number of version records to return.
+                               Defaults to 200.
+
+    Returns:
+        list: A list of rows from the 'product_field_versions' table.
+    """
     ensure_version_table()
     with get_sqlite_connection() as conn:
         cur = conn.cursor()
@@ -133,6 +204,14 @@ def get_versions(product_id=None, limit=200):
     return rows
 
 def get_version_by_id(vid):
+    """Retrieves a specific version record by its ID.
+
+    Args:
+        vid (int): The ID of the version record.
+
+    Returns:
+        sqlite3.Row: The version record, or None if not found.
+    """
     ensure_version_table()
     with get_sqlite_connection() as conn:
         cur = conn.cursor()
@@ -141,6 +220,16 @@ def get_version_by_id(vid):
     return row
 
 def rollback_version(vid, performer='web'):
+    """Rolls back a specific field change to its previous value.
+
+    Args:
+        vid (int): The ID of the version record to roll back.
+        performer (str, optional): Identifier for who is performing the rollback.
+                                   Defaults to 'web'.
+
+    Raises:
+        ValueError: If the version ID is not found.
+    """
     v = get_version_by_id(vid)
     if not v:
         raise ValueError('version not found')
@@ -522,6 +611,11 @@ app.jinja_loader = DictLoader({
 # --- Routes -----------------------------------------------------------------
 @app.route('/')
 def index():
+    """Displays the list of products, with an optional search query.
+
+    Returns:
+        str: Rendered HTML of the product list page.
+    """
     q = request.args.get('q', '').strip()
     with get_sqlite_connection() as conn:
         if q:
@@ -548,6 +642,14 @@ def index():
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):
+    """Displays the details of a single product.
+
+    Args:
+        product_id (int): The ID of the product to display.
+
+    Returns:
+        str: Rendered HTML of the product detail page, or a 404 error if not found.
+    """
     with get_sqlite_connection() as conn:
         row = conn.execute("SELECT * FROM product WHERE id = ?", (product_id,)).fetchone()
 
@@ -568,6 +670,15 @@ def view_product(product_id):
 
 @app.route('/add', methods=['GET', 'POST'])
 def add_product():
+    """Handles the creation of a new product.
+
+    On GET, it displays the form to add a product.
+    On POST, it processes the form data and creates the new product.
+
+    Returns:
+        werkzeug.wrappers.Response: A redirect to the product list on success.
+        str: Rendered HTML of the add product form on GET or validation failure.
+    """
     cols_info = get_table_info('product')
     # Exclude 'id' which is autoincrement
     cols_for_form = [c for c in cols_info if c[1] != 'id']
@@ -618,6 +729,18 @@ def add_product():
 
 @app.route('/edit/<int:product_id>', methods=['GET', 'POST'])
 def edit_product(product_id):
+    """Handles editing an existing product.
+
+    On GET, it displays the form pre-filled with the product's data.
+    On POST, it processes the form data and updates the product.
+
+    Args:
+        product_id (int): The ID of the product to edit.
+
+    Returns:
+        werkzeug.wrappers.Response: A redirect to the product view on success.
+        str: Rendered HTML of the edit product form on GET or validation failure.
+    """
     cols_info = get_table_info('product')
     cols_for_form = [c for c in cols_info if c[1] != 'id']
     col_map = {c[1]: c for c in cols_info}
@@ -693,6 +816,14 @@ def edit_product(product_id):
 
 @app.route('/delete/<int:product_id>')
 def delete_product(product_id):
+    """Deletes a product from the catalog.
+
+    Args:
+        product_id (int): The ID of the product to delete.
+
+    Returns:
+        werkzeug.wrappers.Response: A redirect to the product list.
+    """
     with get_sqlite_connection() as conn:
         # Optional: check if product exists before deleting
         cur = conn.execute("SELECT id FROM product WHERE id = ?", (product_id,))
@@ -711,6 +842,13 @@ def delete_product(product_id):
 
 @app.route('/compare')
 def compare():
+    """Displays a side-by-side comparison of selected products.
+
+    Product IDs are passed as query parameters.
+
+    Returns:
+        str: Rendered HTML of the product comparison page.
+    """
     ids = request.args.getlist('ids', type=int)
     products = []
     if ids:
@@ -738,12 +876,21 @@ def compare():
 # --- Schema designer routes -----------------------------------------------
 @app.route('/schema')
 def schema():
+    """Displays the schema designer page.
+
+    Shows current columns of the 'product' table and provides forms
+    for adding, modifying, or dropping columns.
+
+    Returns:
+        str: Rendered HTML of the schema designer page.
+    """
     cols = get_table_info('product')
     create_sql = get_create_table_sql('product')
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'schema.html')[0], cols=cols, create_sql=create_sql)
 
 @app.route('/schema/add', methods=['POST'])
 def add_column():
+    """Handles the form submission for adding a new column to the 'product' table."""
     name = sanitize_identifier(request.form.get('name', '').strip())
     ctype = request.form.get('type', 'TEXT').strip().upper()
     dflt = request.form.get('default') or None
@@ -757,6 +904,7 @@ def add_column():
 
 @app.route('/schema/drop', methods=['POST'])
 def drop_column():
+    """Handles the form submission for dropping a column from the 'product' table."""
     col = sanitize_identifier(request.form.get('col', ''))
     try:
         # To drop: rebuild table without the column
@@ -776,6 +924,7 @@ def drop_column():
 
 @app.route('/schema/modify', methods=['POST'])
 def modify_column():
+    """Handles the form submission for modifying a column in the 'product' table."""
     col_old = sanitize_identifier(request.form.get('col_old', ''))
     col_new = sanitize_identifier(request.form.get('col_new', col_old).strip())
     col_type = request.form.get('col_type', 'TEXT').strip().upper()
@@ -798,12 +947,27 @@ def modify_column():
 # --- Versions GUI routes --------------------------------------------------
 @app.route('/versions')
 def versions():
+    """Displays the version history of product field changes.
+
+    Can be filtered by product ID via a query parameter.
+
+    Returns:
+        str: Rendered HTML of the versions page.
+    """
     pid = request.args.get('product_id', type=int)
     versions = get_versions(product_id=pid, limit=500)
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'versions.html')[0], versions=versions)
 
 @app.route('/version/<int:vid>')
 def version_view(vid):
+    """Displays the details of a single version record.
+
+    Args:
+        vid (int): The ID of the version record to display.
+
+    Returns:
+        str: Rendered HTML of the version detail page, or 404 if not found.
+    """
     v = get_version_by_id(vid)
     if not v:
         return 'Not found', 404
@@ -811,6 +975,7 @@ def version_view(vid):
 
 @app.route('/rollback', methods=['POST'])
 def rollback():
+    """Handles the form submission to roll back a field change."""
     vid = int(request.form.get('vid'))
     try:
         rollback_version(vid, performer='web')
@@ -822,6 +987,11 @@ def rollback():
 # --- API --------------------------------------------------------------------
 @app.route('/api/products')
 def api_products():
+    """Provides a JSON API endpoint for all products.
+
+    Returns:
+        dict: A dictionary containing a list of all products.
+    """
     with get_sqlite_connection() as conn:
         rows = conn.execute("SELECT * FROM product ORDER BY id DESC").fetchall()
 

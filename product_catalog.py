@@ -689,7 +689,7 @@ schema_tpl = """
 
       <hr>
       <h4>Raw CREATE TABLE</h4>
-      <pre>{{ create_sql }}</pre>
+      <pre style="white-space: pre-wrap; word-break: break-all;">{{ create_sql }}</pre>
 
       <hr>
       <h4>Run SQL Script</h4>

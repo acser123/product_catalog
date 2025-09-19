@@ -377,41 +377,30 @@ index_tpl = """
 view_tpl = """
 {% extends 'layout' %}
 {% block content %}
-  <div class="row">
-    <div class="col-md-5">
-      {% if hasattr(product, 'image_url') and product.image_url %}
-        <img src="{{ product.image_url }}" alt="{{ getattr(product, 'name', 'Product image') }}" class="img-fluid rounded">
-      {% else %}
-        <div class="border rounded p-5 text-center text-muted">No image</div>
-      {% endif %}
-    </div>
-    <div class="col-md-7">
-      <h1>{{ getattr(product, title_field, 'Unnamed Product') }}</h1>
+  <h1>{{ getattr(product, title_field, 'Unnamed Product') }}</h1>
 
-      <dl class="row mt-4">
-        {% for col in cols %}
-          {% set col_name = col[1] %}
-          <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
-          <dd class="col-sm-8">
-            {% set value = getattr(product, col_name, None) %}
-            {% if value is not none %}
-              {% if col_name == 'price_cents' %}
-                €{{ '%.2f'|format(value / 100.0) }}
-              {% else %}
-                {{ value }}
-              {% endif %}
-            {% else %}
-              <span class="text-muted">N/A</span>
-            {% endif %}
-          </dd>
-        {% endfor %}
-      </dl>
+  <dl class="row mt-4">
+    {% for col in cols %}
+      {% set col_name = col[1] %}
+      <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+      <dd class="col-sm-8">
+        {% set value = getattr(product, col_name, None) %}
+        {% if value is not none %}
+          {% if col_name == 'price_cents' %}
+            €{{ '%.2f'|format(value / 100.0) }}
+          {% else %}
+            {{ value }}
+          {% endif %}
+        {% else %}
+          <span class="text-muted">N/A</span>
+        {% endif %}
+      </dd>
+    {% endfor %}
+  </dl>
 
-      <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
-      <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
-      <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
-    </div>
-  </div>
+  <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+  <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+  <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
 {% endblock %}
 """
 
@@ -472,12 +461,14 @@ designer_tpl = """
     <div class="mb-3">
         <label class="form-label">Attributes to Display</label>
         {% for col in all_columns %}
+            {% if col[1] != 'image_url' %}
             <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="view_columns" value="{{ col[1] }}" id="view-col-{{ col[1] }}" {% if col[1] in selected_view_columns %}checked{% endif %}>
                 <label class="form-check-label" for="view-col-{{ col[1] }}">
                     {{ col[1].replace('_', ' ')|title }}
                 </label>
             </div>
+            {% endif %}
         {% endfor %}
     </div>
 
@@ -755,14 +746,15 @@ def view_product(product_id):
     all_cols_info = get_table_info('product')
 
     # Exclude special columns that are handled differently in the template
-    special_cols = ['id', 'image_url', title_field]
+    special_cols = ['id', title_field]
 
     if selected_cols:
         # If designer is configured, show the intersection of selected columns and non-special columns
         cols_to_display = [c for c in all_cols_info if c[1] in selected_cols and c[1] not in special_cols]
     else:
         # If designer is not configured, show all non-special columns (original behavior)
-        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols]
+        # Also exclude image_url here in the default case, since it's not in the new designer checklist
+        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols and c[1] != 'image_url']
 
 
     # Helper to safely get attributes, especially for templates

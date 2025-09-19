@@ -1,5 +1,3 @@
-
-
 from flask import Flask, request, redirect, url_for, render_template_string, flash
 from flask_sqlalchemy import SQLAlchemy
 from decimal import Decimal
@@ -19,6 +17,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'dev-secret-change-me'
 
 db = SQLAlchemy(app)
+
+# Add custom functions to Jinja context for templates
+app.jinja_env.globals.update(hasattr=hasattr, getattr=getattr)
 
 # --- Models -----------------------------------------------------------------
 # The Product model is no longer explicitly defined.
@@ -699,7 +700,13 @@ def add_product():
 
     if request.method == 'POST':
         values = {}
-        for col_name, col_type, _, _, _, _ in cols_for_form:
+        # Unpack column info correctly using indexing to avoid ambiguity
+        for col_info in cols_for_form:
+            # c[1] is name, c[2] is type, c[3] is notnull, c[4] is default_value
+            col_name = col_info[1]
+            col_type = col_info[2]
+            not_null = col_info[3]
+            dflt_val = col_info[4]
             val = request.form.get(col_name)
 
             # Special handling for price, assuming a 'price' form field for user convenience
@@ -713,14 +720,25 @@ def add_product():
                     return redirect(url_for('add_product'))
                 continue
 
-            if 'INT' in col_type and val:
-                try:
-                    values[col_name] = int(val)
-                except (ValueError, TypeError):
-                     flash(f"Invalid integer value for {col_name}")
-                     return redirect(url_for('add_product'))
-            else:
-                values[col_name] = val if val != '' else None
+            if val is not None and val != '':
+                if 'INT' in col_type.upper():
+                    try:
+                        values[col_name] = int(val)
+                    except (ValueError, TypeError):
+                        flash(f"Invalid integer value for {col_name}")
+                        return redirect(url_for('add_product'))
+                else:
+                    values[col_name] = val
+            else: # val is missing or empty
+                if not_null and dflt_val is None:
+                    if 'INT' in col_type.upper():
+                        values[col_name] = 0
+                    elif 'TEXT' in col_type.upper():
+                        values[col_name] = ''
+                    else: # Best effort for other types like REAL, etc.
+                        values[col_name] = None
+                else:
+                    values[col_name] = None
 
         col_names = [sanitize_identifier(k) for k in values.keys()]
         placeholders = ','.join(['?'] * len(values))
@@ -767,7 +785,13 @@ def edit_product(product_id):
 
     if request.method == 'POST':
         new_values = {}
-        for col_name, col_type, _, _, _, _ in cols_for_form:
+        # Unpack column info correctly using indexing to avoid ambiguity
+        for col_info in cols_for_form:
+            # c[1] is name, c[2] is type, c[3] is notnull, c[4] is default_value
+            col_name = col_info[1]
+            col_type = col_info[2]
+            not_null = col_info[3]
+            dflt_val = col_info[4]
             val = request.form.get(col_name)
 
             if col_name == 'price_cents' and 'price' in request.form:
@@ -780,14 +804,25 @@ def edit_product(product_id):
                     return redirect(url_for('edit_product', product_id=product_id))
                 continue
 
-            if 'INT' in col_type and val:
-                try:
-                    new_values[col_name] = int(val) if val else None
-                except (ValueError, TypeError):
-                    flash(f"Invalid integer value for {col_name}")
-                    return redirect(url_for('edit_product', product_id=product_id))
-            else:
-                new_values[col_name] = val if val != '' else None
+            if val is not None and val != '':
+                if 'INT' in col_type.upper():
+                    try:
+                        new_values[col_name] = int(val) if val else None
+                    except (ValueError, TypeError):
+                        flash(f"Invalid integer value for {col_name}")
+                        return redirect(url_for('edit_product', product_id=product_id))
+                else:
+                    new_values[col_name] = val
+            else: # val is missing or empty
+                if not_null and dflt_val is None:
+                    if 'INT' in col_type.upper():
+                        new_values[col_name] = 0
+                    elif 'TEXT' in col_type.upper():
+                        new_values[col_name] = ''
+                    else: # Best effort for other types like REAL, etc.
+                        new_values[col_name] = None
+                else:
+                    new_values[col_name] = None
 
         # Build UPDATE statement
         set_clauses = [f"{sanitize_identifier(k)}=?" for k in new_values.keys()]

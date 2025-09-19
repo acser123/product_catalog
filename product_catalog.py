@@ -37,6 +37,18 @@ CREATE TABLE IF NOT EXISTS product_field_versions (
 )
 '''
 
+# Default product table schema, created if it doesn't exist
+PRODUCT_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT,
+    description TEXT,
+    price_cents INTEGER,
+    image_url TEXT
+);
+'''
+
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
     """Establishes a connection to the SQLite database.
@@ -247,6 +259,8 @@ def rollback_version(vid, performer='web'):
 with app.app_context():
     with get_sqlite_connection() as conn:
         conn.execute(VERSION_TABLE_SQL)
+        # Also ensure the main product table exists with a default schema
+        conn.execute(PRODUCT_TABLE_SQL)
         conn.commit()
 
 # --- Templates --------------------------------------------------------------

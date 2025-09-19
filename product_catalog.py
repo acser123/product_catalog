@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS "product" (
 );
 '''
 
+# Table to store which columns to display on the index page
+DISPLAY_COLUMNS_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product_display_columns (
+    column_name TEXT PRIMARY KEY
+);
+'''
+
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
     """Establishes a connection to the SQLite database.
@@ -258,6 +265,7 @@ with app.app_context():
         conn.execute(VERSION_TABLE_SQL)
         # Also ensure the main product table exists with a default schema
         conn.execute(PRODUCT_TABLE_SQL)
+        conn.execute(DISPLAY_COLUMNS_TABLE_SQL)
         conn.commit()
 
 # --- Templates --------------------------------------------------------------
@@ -280,6 +288,7 @@ layout = """
             <li class="nav-item"><a class="nav-link" href="{{ url_for('add_product') }}">Add product</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('compare') }}">Compare</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('schema') }}">Schema Designer</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('display_designer') }}">Display Designer</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('versions') }}">Versions</a></li>
           </ul>
         </div>
@@ -321,12 +330,9 @@ index_tpl = """
           <div class="col">
             <div class="card h-100">
               <div class="card-body">
-                {% if col1_name %}
-                  <h5 class="card-title">{{ getattr(p, col1_name, 'N/A') }}</h5>
-                {% endif %}
-                {% if col2_name %}
-                  <h6 class="card-subtitle mb-2 text-muted">{{ getattr(p, col2_name, 'N/A') }}</h6>
-                {% endif %}
+                {% for col_name in col_names %}
+                  <p class="card-text"><strong>{{ col_name.replace('_', ' ')|title }}:</strong> {{ getattr(p, col_name, 'N/A') }}</p>
+                {% endfor %}
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}">
                   <label class="form-check-label">Compare</label>
@@ -425,6 +431,27 @@ form_tpl = """
 
     <button class="btn btn-primary" type="submit">Save</button>
     <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Cancel</a>
+  </form>
+{% endblock %}
+"""
+
+designer_tpl = """
+{% extends 'layout' %}
+{% block content %}
+  <h1>Display Designer</h1>
+  <p class="text-muted">Select which columns to display on the Products page.</p>
+  <form method="post">
+    <div class="mb-3">
+      {% for col in all_columns %}
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="columns" value="{{ col[1] }}" id="col-{{ col[1] }}" {% if col[1] in selected_columns %}checked{% endif %}>
+          <label class="form-check-label" for="col-{{ col[1] }}">
+            {{ col[1].replace('_', ' ')|title }}
+          </label>
+        </div>
+      {% endfor %}
+    </div>
+    <button class="btn btn-primary" type="submit">Save</button>
   </form>
 {% endblock %}
 """
@@ -609,6 +636,7 @@ app.jinja_loader = DictLoader({
     'schema.html': schema_tpl,
     'versions.html': versions_tpl,
     'version_view.html': version_view_tpl,
+    'designer.html': designer_tpl,
 })
 
 # --- Routes -----------------------------------------------------------------
@@ -641,12 +669,17 @@ def index():
         # Convert rows to list of SimpleNamespace objects to allow dot notation access in template
         products = [SimpleNamespace(**dict(row)) for row in rows]
 
-    # Get schema info to display columns dynamically
-    cols_info = get_table_info('product')
-    col1_name = cols_info[0][1] if len(cols_info) > 0 else None
-    col2_name = cols_info[1][1] if len(cols_info) > 1 else None
+    # Get the columns to display from the designer settings
+    with get_sqlite_connection() as conn:
+        cur = conn.execute("SELECT column_name FROM product_display_columns")
+        col_names = [row[0] for row in cur.fetchall()]
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products, col1_name=col1_name, col2_name=col2_name)
+    # If no columns are selected, default to the first two
+    if not col_names:
+        cols_info = get_table_info('product')
+        col_names = [c[1] for c in cols_info[:2]]
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products, col_names=col_names)
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):
@@ -914,6 +947,28 @@ def compare():
     # Exclude id column from comparison view
     cols_for_table = [c for c in cols_info if c[1] != 'id']
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'compare.html')[0], products=products, cols=cols_for_table, getattr=getattr)
+
+# --- Display designer routes ----------------------------------------------
+@app.route('/display-designer', methods=['GET', 'POST'])
+def display_designer():
+    all_columns = get_table_info('product')
+
+    if request.method == 'POST':
+        selected = request.form.getlist('columns')
+        with get_sqlite_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM product_display_columns")
+            for col_name in selected:
+                cur.execute("INSERT INTO product_display_columns (column_name) VALUES (?)", (col_name,))
+            conn.commit()
+        flash('Display preferences updated')
+        return redirect(url_for('display_designer'))
+
+    with get_sqlite_connection() as conn:
+        cur = conn.execute("SELECT column_name FROM product_display_columns")
+        selected_columns = [row[0] for row in cur.fetchall()]
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0], all_columns=all_columns, selected_columns=selected_columns)
 
 # --- Schema designer routes -----------------------------------------------
 @app.route('/schema')

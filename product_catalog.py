@@ -332,10 +332,25 @@ index_tpl = """
 {% block content %}
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h1>Products</h1>
-    <form class="d-flex" method="get" action="{{ url_for('index') }}">
-      <input class="form-control me-2" name="q" placeholder="Search any text field" value="{{ request.args.get('q','') }}">
-      <button class="btn btn-outline-secondary" type="submit">Search</button>
-    </form>
+    <div class="d-flex">
+        <form class="d-flex me-2" method="get" action="{{ url_for('index') }}">
+            <input class="form-control me-2" name="q" placeholder="Search any text field" value="{{ request.args.get('q','') }}">
+            <button class="btn btn-outline-secondary" type="submit">Search</button>
+        </form>
+        <form class="d-flex" method="get" action="{{ url_for('index') }}">
+            <input type="hidden" name="q" value="{{ request.args.get('q','') }}">
+            <select name="sort_by" class="form-select me-2">
+                {% for col in all_columns %}
+                    <option value="{{ col }}" {% if col == sort_by %}selected{% endif %}>{{ col.replace('_', ' ')|title }}</option>
+                {% endfor %}
+            </select>
+            <select name="order" class="form-select me-2">
+                <option value="asc" {% if order == 'asc' %}selected{% endif %}>Asc</option>
+                <option value="desc" {% if order == 'desc' %}selected{% endif %}>Desc</option>
+            </select>
+            <button class="btn btn-outline-primary" type="submit">Sort</button>
+        </form>
+    </div>
   </div>
 
   {% if products|length == 0 %}
@@ -692,10 +707,22 @@ def index():
         str: Rendered HTML of the product list page.
     """
     q = request.args.get('q', '').strip()
+    sort_by = request.args.get('sort_by', 'id')
+    order = request.args.get('order', 'desc')
+
+    cols_info = get_table_info('product')
+    all_columns = [c[1] for c in cols_info]
+
+    if sort_by not in all_columns:
+        sort_by = 'id'
+    if order.lower() not in ['asc', 'desc']:
+        order = 'desc'
+
+    order_by_clause = f"{sort_by} {order}"
+
     with get_sqlite_connection() as conn:
         if q:
             # Get text-like columns to search
-            cols_info = get_table_info('product')
             text_cols = [c[1] for c in cols_info if 'TEXT' in c[2].upper() or 'CHAR' in c[2].upper()]
 
             # Build a WHERE clause with ORs for all text columns
@@ -705,9 +732,9 @@ def index():
             sql_where = " OR ".join(where_clauses)
             params = [f"%{q.lower()}%"] * len(text_cols)
 
-            cur = conn.execute(f"SELECT * FROM product WHERE {sql_where} ORDER BY id DESC", params)
+            cur = conn.execute(f"SELECT * FROM product WHERE {sql_where} ORDER BY {order_by_clause}", params)
         else:
-            cur = conn.execute("SELECT * FROM product ORDER BY id DESC")
+            cur = conn.execute(f"SELECT * FROM product ORDER BY {order_by_clause}")
 
         rows = cur.fetchall()
         # Convert rows to list of SimpleNamespace objects to allow dot notation access in template
@@ -720,10 +747,14 @@ def index():
 
     # If no columns are selected, default to the first two
     if not col_names:
-        cols_info = get_table_info('product')
         col_names = [c[1] for c in cols_info[:2]]
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products, col_names=col_names)
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0],
+                                  products=products,
+                                  col_names=col_names,
+                                  all_columns=all_columns,
+                                  sort_by=sort_by,
+                                  order=order)
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):

@@ -646,7 +646,7 @@ def index():
     col1_name = cols_info[0][1] if len(cols_info) > 0 else None
     col2_name = cols_info[1][1] if len(cols_info) > 1 else None
 
-    return render_template_string(app.jinja_loader.get_source(app.jin_env, 'index.html')[0], products=products, col1_name=col1_name, col2_name=col2_name)
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products, col1_name=col1_name, col2_name=col2_name)
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):

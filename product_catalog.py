@@ -40,13 +40,9 @@ CREATE TABLE IF NOT EXISTS product_field_versions (
 
 # Default product table schema, created if it doesn't exist
 PRODUCT_TABLE_SQL = '''
-CREATE TABLE IF NOT EXISTS product (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    category TEXT,
-    description TEXT,
-    price_cents INTEGER,
-    image_url TEXT
+CREATE TABLE IF NOT EXISTS "product" (
+    id INTEGER PRIMARY KEY,
+    Vendor_name TEXT
 );
 '''
 

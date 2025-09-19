@@ -605,7 +605,7 @@ versions_tpl = """
             <a href="{{ url_for('versions', sort=col, order='asc' if sort_by==col and order=='desc' else 'desc', product_id=request.args.get('product_id','')) }}" style="text-decoration: none; color: inherit;">
               {{ display }}
               {% if sort_by == col %}
-                <span style="float: right;">{{ '&#9660;' if order == 'desc' else '&#9650;' }}</span>
+                <span style="float: right;">{{ '&darr;' if order == 'desc' else '&uarr;' }}</span>
               {% endif %}
             </a>
           </th>

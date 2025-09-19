@@ -391,21 +391,19 @@ view_tpl = """
       <dl class="row mt-4">
         {% for col in cols %}
           {% set col_name = col[1] %}
-          {% if col_name not in ['id', 'name', 'image_url'] %}
-            <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
-            <dd class="col-sm-8">
-              {% set value = getattr(product, col_name, None) %}
-              {% if value is not none %}
-                {% if col_name == 'price_cents' %}
-                  €{{ '%.2f'|format(value / 100.0) }}
-                {% else %}
-                  {{ value }}
-                {% endif %}
+          <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+          <dd class="col-sm-8">
+            {% set value = getattr(product, col_name, None) %}
+            {% if value is not none %}
+              {% if col_name == 'price_cents' %}
+                €{{ '%.2f'|format(value / 100.0) }}
               {% else %}
-                <span class="text-muted">N/A</span>
+                {{ value }}
               {% endif %}
-            </dd>
-          {% endif %}
+            {% else %}
+              <span class="text-muted">N/A</span>
+            {% endif %}
+          </dd>
         {% endfor %}
       </dl>
 
@@ -731,14 +729,31 @@ def view_product(product_id):
 
     product = SimpleNamespace(**dict(row))
 
+    # Get configured columns from the designer
+    with get_sqlite_connection() as conn:
+        cur = conn.execute("SELECT column_name FROM product_display_columns")
+        selected_cols = [row[0] for row in cur.fetchall()]
+
+    all_cols_info = get_table_info('product')
+
+    # These are always handled specially by the template, so exclude them from the main attribute list.
+    special_cols = ['id', 'name', 'image_url']
+
+    if selected_cols:
+        # If designer is configured, show the intersection of selected columns and non-special columns
+        cols_to_display = [c for c in all_cols_info if c[1] in selected_cols and c[1] not in special_cols]
+    else:
+        # If designer is not configured, show all non-special columns (original behavior)
+        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols]
+
+
     # Helper to safely get attributes, especially for templates
     def _getattr(obj, key, default=''):
         return getattr(obj, key, default)
 
-    cols_info = get_table_info('product')
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0],
                                   product=product,
-                                  cols=cols_info,
+                                  cols=cols_to_display,
                                   getattr=_getattr)
 
 @app.route('/add', methods=['GET', 'POST'])

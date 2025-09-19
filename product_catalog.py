@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS product_display_columns (
 );
 '''
 
+# Table to store config settings for the product view page
+VIEW_CONFIG_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product_view_config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+'''
+
+# Table to store which columns to display on the view page
+VIEW_DISPLAY_COLUMNS_TABLE_SQL = '''
+CREATE TABLE IF NOT EXISTS product_view_display_columns (
+    column_name TEXT PRIMARY KEY
+);
+'''
+
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
     """Establishes a connection to the SQLite database.
@@ -266,6 +281,8 @@ with app.app_context():
         # Also ensure the main product table exists with a default schema
         conn.execute(PRODUCT_TABLE_SQL)
         conn.execute(DISPLAY_COLUMNS_TABLE_SQL)
+        conn.execute(VIEW_CONFIG_TABLE_SQL)
+        conn.execute(VIEW_DISPLAY_COLUMNS_TABLE_SQL)
         conn.commit()
 
 # --- Templates --------------------------------------------------------------
@@ -360,32 +377,41 @@ index_tpl = """
 view_tpl = """
 {% extends 'layout' %}
 {% block content %}
-  <h1>{{ getattr(product, 'name', 'Unnamed Product') }}</h1>
-
-  <dl class="row mt-4">
-    {% for col in cols %}
-      {% set col_name = col[1] %}
-      {% if col_name not in ['id', 'name', 'image_url'] %}
-        <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
-        <dd class="col-sm-8">
-          {% set value = getattr(product, col_name, None) %}
-          {% if value is not none %}
-            {% if col_name == 'price_cents' %}
-              €{{ '%.2f'|format(value / 100.0) }}
-            {% else %}
-              {{ value }}
-            {% endif %}
-          {% else %}
-            <span class="text-muted">N/A</span>
-          {% endif %}
-        </dd>
+  <div class="row">
+    <div class="col-md-5">
+      {% if hasattr(product, 'image_url') and product.image_url %}
+        <img src="{{ product.image_url }}" alt="{{ getattr(product, 'name', 'Product image') }}" class="img-fluid rounded">
+      {% else %}
+        <div class="border rounded p-5 text-center text-muted">No image</div>
       {% endif %}
-    {% endfor %}
-  </dl>
+    </div>
+    <div class="col-md-7">
+      <h1>{{ getattr(product, title_field, 'Unnamed Product') }}</h1>
 
-  <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
-  <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
-  <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
+      <dl class="row mt-4">
+        {% for col in cols %}
+          {% set col_name = col[1] %}
+          <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+          <dd class="col-sm-8">
+            {% set value = getattr(product, col_name, None) %}
+            {% if value is not none %}
+              {% if col_name == 'price_cents' %}
+                €{{ '%.2f'|format(value / 100.0) }}
+              {% else %}
+                {{ value }}
+              {% endif %}
+            {% else %}
+              <span class="text-muted">N/A</span>
+            {% endif %}
+          </dd>
+        {% endfor %}
+      </dl>
+
+      <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+      <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
+      <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Back</a>
+    </div>
+  </div>
 {% endblock %}
 """
 
@@ -428,19 +454,47 @@ designer_tpl = """
 {% extends 'layout' %}
 {% block content %}
   <h1>Display Designer</h1>
-  <p class="text-muted">Select which columns to display on the Products page.</p>
+
   <form method="post">
+    <hr>
+    <h4>Product View Page Settings</h4>
+    <div class="mb-3">
+        <label for="title_field_select" class="form-label">Title Field</label>
+        <select class="form-select" name="title_field" id="title_field_select">
+            {% for col in all_columns %}
+                <option value="{{ col[1] }}" {% if col[1] == selected_title_field %}selected{% endif %}>
+                    {{ col[1].replace('_', ' ')|title }}
+                </option>
+            {% endfor %}
+        </select>
+        <div class="form-text">Select which field to use as the main title on the product detail page.</div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Attributes to Display</label>
+        {% for col in all_columns %}
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="view_columns" value="{{ col[1] }}" id="view-col-{{ col[1] }}" {% if col[1] in selected_view_columns %}checked{% endif %}>
+                <label class="form-check-label" for="view-col-{{ col[1] }}">
+                    {{ col[1].replace('_', ' ')|title }}
+                </label>
+            </div>
+        {% endfor %}
+    </div>
+
+    <hr>
+    <h4>Product List Page Settings</h4>
+    <p class="text-muted">Select which columns to display on the main products grid.</p>
     <div class="mb-3">
       {% for col in all_columns %}
         <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="columns" value="{{ col[1] }}" id="col-{{ col[1] }}" {% if col[1] in selected_columns %}checked{% endif %}>
-          <label class="form-check-label" for="col-{{ col[1] }}">
+          <input class="form-check-input" type="checkbox" name="list_columns" value="{{ col[1] }}" id="list-col-{{ col[1] }}" {% if col[1] in selected_list_columns %}checked{% endif %}>
+          <label class="form-check-label" for="list-col-{{ col[1] }}">
             {{ col[1].replace('_', ' ')|title }}
           </label>
         </div>
       {% endfor %}
     </div>
-    <button class="btn btn-primary" type="submit">Save</button>
+    <button class="btn btn-primary" type="submit">Save Display Settings</button>
   </form>
 {% endblock %}
 """
@@ -688,14 +742,37 @@ def view_product(product_id):
 
     product = SimpleNamespace(**dict(row))
 
+    with get_sqlite_connection() as conn:
+        # Fetch the configured title field
+        cur = conn.execute("SELECT value FROM product_view_config WHERE key = 'title_field'")
+        title_field_row = cur.fetchone()
+        title_field = title_field_row[0] if title_field_row else 'name'
+
+        # Fetch the columns to display for the attribute list
+        cur = conn.execute("SELECT column_name FROM product_view_display_columns")
+        selected_cols = [r[0] for r in cur.fetchall()]
+
+    all_cols_info = get_table_info('product')
+
+    # Exclude special columns that are handled differently in the template
+    special_cols = ['id', 'image_url', title_field]
+
+    if selected_cols:
+        # If designer is configured, show the intersection of selected columns and non-special columns
+        cols_to_display = [c for c in all_cols_info if c[1] in selected_cols and c[1] not in special_cols]
+    else:
+        # If designer is not configured, show all non-special columns (original behavior)
+        cols_to_display = [c for c in all_cols_info if c[1] not in special_cols]
+
+
     # Helper to safely get attributes, especially for templates
     def _getattr(obj, key, default=''):
         return getattr(obj, key, default)
 
-    cols_info = get_table_info('product')
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0],
                                   product=product,
-                                  cols=cols_info,
+                                  title_field=title_field,
+                                  cols=cols_to_display,
                                   getattr=_getattr)
 
 @app.route('/add', methods=['GET', 'POST'])
@@ -943,21 +1020,54 @@ def display_designer():
     all_columns = get_table_info('product')
 
     if request.method == 'POST':
-        selected = request.form.getlist('columns')
+        # Handle product list columns
+        selected_list_cols = request.form.getlist('list_columns')
         with get_sqlite_connection() as conn:
             cur = conn.cursor()
             cur.execute("DELETE FROM product_display_columns")
-            for col_name in selected:
+            for col_name in selected_list_cols:
                 cur.execute("INSERT INTO product_display_columns (column_name) VALUES (?)", (col_name,))
             conn.commit()
+
+        # Handle product view columns
+        selected_view_cols = request.form.getlist('view_columns')
+        with get_sqlite_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM product_view_display_columns")
+            for col_name in selected_view_cols:
+                cur.execute("INSERT INTO product_view_display_columns (column_name) VALUES (?)", (col_name,))
+            conn.commit()
+
+        # Handle product view title field
+        title_field = request.form.get('title_field')
+        if title_field:
+            with get_sqlite_connection() as conn:
+                conn.execute("INSERT OR REPLACE INTO product_view_config (key, value) VALUES (?, ?)", ('title_field', title_field))
+                conn.commit()
+
         flash('Display preferences updated')
         return redirect(url_for('display_designer'))
 
+    # GET request
     with get_sqlite_connection() as conn:
+        # Fetch selected columns for product list
         cur = conn.execute("SELECT column_name FROM product_display_columns")
-        selected_columns = [row[0] for row in cur.fetchall()]
+        selected_list_columns = [row[0] for row in cur.fetchall()]
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0], all_columns=all_columns, selected_columns=selected_columns)
+        # Fetch selected columns for product view
+        cur = conn.execute("SELECT column_name FROM product_view_display_columns")
+        selected_view_columns = [row[0] for row in cur.fetchall()]
+
+        # Fetch selected title field for product view
+        cur = conn.execute("SELECT value FROM product_view_config WHERE key = 'title_field'")
+        row = cur.fetchone()
+        selected_title_field = row[0] if row else 'name'
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'designer.html')[0],
+                                  all_columns=all_columns,
+                                  selected_list_columns=selected_list_columns,
+                                  selected_view_columns=selected_view_columns,
+                                  selected_title_field=selected_title_field)
 
 # --- Schema designer routes -----------------------------------------------
 @app.route('/schema')

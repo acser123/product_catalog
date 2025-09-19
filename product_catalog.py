@@ -1,152 +1,4 @@
 
-from flask import Flask, render_template_string, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
-from types import SimpleNamespace
-
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///catalog.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = "secret"
-db = SQLAlchemy(app)
-
-# -----------------------
-# Database Models
-# -----------------------
-class Product(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    price = db.Column(db.Float, nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    image_url = db.Column(db.String(250), nullable=True)
-
-class ProductVersion(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, nullable=False)
-    field_name = db.Column(db.String(100), nullable=False)
-    old_value = db.Column(db.Text, nullable=True)
-    new_value = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-with app.app_context():
-    db.create_all()
-
-# -----------------------
-# Routes
-# -----------------------
-@app.route('/')
-def index():
-    products = Product.query.all()
-    return render_template_string(TEMPLATES['index'], products=products)
-
-@app.route('/product/<int:product_id>')
-def view_product(product_id):
-    product = Product.query.get_or_404(product_id)
-    return render_template_string(TEMPLATES['view'], product=product)
-
-@app.route('/product/add', methods=['GET', 'POST'])
-def add_product():
-    if request.method == 'POST':
-        name = request.form['name']
-        price = float(request.form['price'])
-        description = request.form['description']
-        image_url = request.form['image_url']
-        product = Product(name=name, price=price, description=description, image_url=image_url)
-        db.session.add(product)
-        db.session.commit()
-        flash("Product added successfully!", "success")
-        return redirect(url_for('index'))
-    return render_template_string(TEMPLATES['add'])
-
-@app.route('/product/<int:product_id>/edit', methods=['GET', 'POST'])
-def edit_product(product_id):
-    product = Product.query.get_or_404(product_id)
-    if request.method == 'POST':
-        # Log changes for versioning
-        for field in ['name', 'price', 'description', 'image_url']:
-            old_value = str(getattr(product, field))
-            new_value = str(request.form[field])
-            if old_value != new_value:
-                version = ProductVersion(
-                    product_id=product.id,
-                    field_name=field,
-                    old_value=old_value,
-                    new_value=new_value
-                )
-                db.session.add(version)
-                setattr(product, field, request.form[field] if field != 'price' else float(new_value))
-        db.session.commit()
-        flash("Product updated successfully!", "success")
-        return redirect(url_for('view_product', product_id=product.id))
-    return render_template_string(TEMPLATES['edit'], product=product)
-
-@app.route('/product/<int:product_id>/delete')
-def delete_product(product_id):
-    product = Product.query.get_or_404(product_id)
-    db.session.delete(product)
-    db.session.commit()
-    flash("Product deleted successfully!", "success")
-    return redirect(url_for('index'))
-
-@app.route('/product/<int:product_id>/history')
-def product_history(product_id):
-    product = Product.query.get_or_404(product_id)
-    history = ProductVersion.query.filter_by(product_id=product_id).order_by(ProductVersion.timestamp.desc()).all()
-    return render_template_string(TEMPLATES['history'], product=product, history=history)
-
-@app.route('/product/<int:product_id>/rollback/<int:version_id>')
-def rollback_version(product_id, version_id):
-    product = Product.query.get_or_404(product_id)
-    version = ProductVersion.query.get_or_404(version_id)
-    if version.product_id != product.id:
-        flash("Invalid rollback attempt.", "danger")
-        return redirect(url_for('product_history', product_id=product.id))
-
-    # Perform rollback: set field to old_value
-    current_value = str(getattr(product, version.field_name))
-    setattr(product, version.field_name, version.old_value if version.field_name != 'price' else float(version.old_value))
-
-    # Log rollback as a new version entry
-    rollback_entry = ProductVersion(
-        product_id=product.id,
-        field_name=version.field_name,
-        old_value=current_value,
-        new_value=version.old_value
-    )
-    db.session.add(rollback_entry)
-    db.session.commit()
-
-    flash(f"Rolled back {version.field_name} to {version.old_value}.", "success")
-    return redirect(url_for('product_history', product_id=product.id))
-
-# -----------------------
-# Templates
-# -----------------------
-TEMPLATES = {}
-
-TEMPLATES['index'] = """
-Simple Flask + SQLite product catalog app in a single file.
-Features:
-- SQLite database (SQLAlchemy)
-- CRUD for products (create, read, update, delete)
-- Product comparison view (compare two or more products side by side)
-- Schema Designer GUI (add / drop / modify columns) with safe SQLite table-recreate migration
-- Field value versioning with GUI to view and rollback versions
-- Small web UI using Bootstrap served from the same file (render_template_string)
-
-Important notes about Schema Designer:
-- Adding columns uses `ALTER TABLE ADD COLUMN` when possible.
-- Dropping or modifying column types in SQLite requires creating a new table with the desired schema, copying data over, and replacing the old table. This is implemented here.
-- SQLAlchemy model (the `Product` class) will NOT automatically pick up runtime schema changes. After changing schema you should **restart the app** to let SQLAlchemy re-import the model and reflect new columns. The GUI will still show the SQLite schema immediately.
-
-Requirements:
-    pip install flask flask_sqlalchemy
-
-Run:
-    python product_catalog.py
-    then open http://127.0.0.1:5000
-
-"""
 
 from flask import Flask, request, redirect, url_for, render_template_string, flash
 from flask_sqlalchemy import SQLAlchemy
@@ -155,6 +7,8 @@ import os
 import sqlite3
 import re
 from datetime import datetime
+from types import SimpleNamespace
+from jinja2 import DictLoader
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'catalog.db')
@@ -167,17 +21,8 @@ app.config['SECRET_KEY'] = 'dev-secret-change-me'
 db = SQLAlchemy(app)
 
 # --- Models -----------------------------------------------------------------
-class Product(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(120), nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    price_cents = db.Column(db.Integer, nullable=False, default=0)
-    stock = db.Column(db.Integer, nullable=False, default=0)
-    category = db.Column(db.String(80), nullable=True)
-    image_url = db.Column(db.String(400), nullable=True)
-
-    def price_display(self):
-        return f"{self.price_cents / 100:.2f}"
+# The Product model is no longer explicitly defined.
+# The schema is managed dynamically via the schema designer.
 
 # Version table will be created manually if missing
 VERSION_TABLE_SQL = '''
@@ -192,29 +37,11 @@ CREATE TABLE IF NOT EXISTS product_field_versions (
 )
 '''
 
-# --- Database helper --------------------------------------------------------
-# @app.before_first_request
-# def create_tables():
-#     db.create_all()
-
-import sqlite3
-
-def get_sqlite_connection():
-    """Open a SQLite connection with row access by column name."""
-    conn = sqlite3.connect("catalog.db")
-    conn.row_factory = sqlite3.Row
-    return conn
-        
-with app.app_context():
-    db.create_all()
-
-with get_sqlite_connection() as conn:
-    conn.execute(VERSION_TABLE_SQL)
-    conn.commit()
-
 # --- Low-level SQLite helpers -----------------------------------------------
 def get_sqlite_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def get_table_info(table_name='product'):
     # Return list of (cid, name, type, notnull, dflt_value, pk)
@@ -327,6 +154,12 @@ def rollback_version(vid, performer='web'):
     # fetch current after rollback to capture previous value? Simpler: record that we set field to old
     record_field_versions(product_id, [(field, new, old)], changed_by=performer)
 
+# --- Database Initialization --------------------------------------------------
+with app.app_context():
+    with get_sqlite_connection() as conn:
+        conn.execute(VERSION_TABLE_SQL)
+        conn.commit()
+
 # --- Templates --------------------------------------------------------------
 layout = """
 <!doctype html>
@@ -374,7 +207,7 @@ index_tpl = """
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h1>Products</h1>
     <form class="d-flex" method="get" action="{{ url_for('index') }}">
-      <input class="form-control me-2" name="q" placeholder="Search name or category" value="{{ request.args.get('q','') }}">
+      <input class="form-control me-2" name="q" placeholder="Search any text field" value="{{ request.args.get('q','') }}">
       <button class="btn btn-outline-secondary" type="submit">Search</button>
     </form>
   </div>
@@ -387,20 +220,27 @@ index_tpl = """
         {% for p in products %}
           <div class="col">
             <div class="card h-100">
-              {% if p.image_url %}
-                <img src="{{ p.image_url }}" class="card-img-top" alt="{{ p.name }}" style="height:200px;object-fit:cover;">
+              {% if hasattr(p, 'image_url') and p.image_url %}
+                <img src="{{ p.image_url }}" class="card-img-top" alt="{{ getattr(p, 'name', 'Product image') }}" style="height:200px;object-fit:cover;">
               {% endif %}
               <div class="card-body">
-                <h5 class="card-title">{{ p.name }}</h5>
-                <h6 class="card-subtitle mb-2 text-muted">{{ p.category or 'Uncategorized' }}</h6>
-                <p class="card-text">{{ p.description[:140] }}{% if p.description|length > 140 %}…{% endif %}</p>
+                <h5 class="card-title">{{ getattr(p, 'name', 'Unnamed Product') }}</h5>
+                <h6 class="card-subtitle mb-2 text-muted">{{ getattr(p, 'category', 'Uncategorized') }}</h6>
+                <p class="card-text">
+                  {% set desc = getattr(p, 'description', '') %}
+                  {{ desc[:140] if desc else '' }}{% if desc and desc|length > 140 %}…{% endif %}
+                </p>
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}">
                   <label class="form-check-label">Compare</label>
                 </div>
               </div>
               <div class="card-footer d-flex justify-content-between align-items-center">
-                <strong class="me-2">€{{ p.price_display() }}</strong>
+                <strong class="me-2">
+                  {% if hasattr(p, 'price_cents') %}
+                    €{{ '%.2f'|format(p.price_cents / 100.0 if p.price_cents else 0) }}
+                  {% endif %}
+                </strong>
                 <div>
                   <a class="btn btn-sm btn-primary" href="{{ url_for('view_product', product_id=p.id) }}">View</a>
                   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_product', product_id=p.id) }}">Edit</a>
@@ -424,18 +264,35 @@ view_tpl = """
 {% block content %}
   <div class="row">
     <div class="col-md-5">
-      {% if product.image_url %}
-        <img src="{{ product.image_url }}" alt="{{ product.name }}" class="img-fluid rounded">
+      {% if hasattr(product, 'image_url') and product.image_url %}
+        <img src="{{ product.image_url }}" alt="{{ getattr(product, 'name', 'Product image') }}" class="img-fluid rounded">
       {% else %}
         <div class="border rounded p-5 text-center text-muted">No image</div>
       {% endif %}
     </div>
     <div class="col-md-7">
-      <h1>{{ product.name }}</h1>
-      <h5 class="text-muted">{{ product.category or 'Uncategorized' }}</h5>
-      <p>{{ product.description }}</p>
-      <p><strong>Price:</strong> €{{ product.price_display() }}</p>
-      <p><strong>Stock:</strong> {{ product.stock }}</p>
+      <h1>{{ getattr(product, 'name', 'Unnamed Product') }}</h1>
+
+      <dl class="row mt-4">
+        {% for col in cols %}
+          {% set col_name = col[1] %}
+          {% if col_name not in ['id', 'name', 'image_url'] %}
+            <dt class="col-sm-4">{{ col_name.replace('_', ' ')|title }}</dt>
+            <dd class="col-sm-8">
+              {% set value = getattr(product, col_name, None) %}
+              {% if value is not none %}
+                {% if col_name == 'price_cents' %}
+                  €{{ '%.2f'|format(value / 100.0) }}
+                {% else %}
+                  {{ value }}
+                {% endif %}
+              {% else %}
+                <span class="text-muted">N/A</span>
+              {% endif %}
+            </dd>
+          {% endif %}
+        {% endfor %}
+      </dl>
 
       <a class="btn btn-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
       <a class="btn btn-danger" href="{{ url_for('delete_product', product_id=product.id) }}" onclick="return confirm('Delete this product?');">Delete</a>
@@ -450,51 +307,29 @@ form_tpl = """
 {% block content %}
   <h1>{{ title }}</h1>
   <form method="post">
-    {% set handled_fields = ['id', 'name', 'category', 'description', 'price_cents', 'stock', 'image_url'] %}
-    <div class="mb-3">
-      <label class="form-label">Name</label>
-      <input name="name" class="form-control" required value="{{ product.name if product else '' }}">
-    </div>
-    <div class="mb-3">
-      <label class="form-label">Category</label>
-      <input name="category" class="form-control" value="{{ product.category if product else '' }}">
-    </div>
-    <div class="mb-3">
-      <label class="form-label">Description</label>
-      <textarea name="description" class="form-control" rows="4">{{ product.description if product else '' }}</textarea>
-    </div>
-    <div class="row g-3">
-      <div class="col-md-4 mb-3">
-        <label class="form-label">Price (e.g. 12.50)</label>
-        <input name="price" class="form-control" required value="{{ product.price_display() if product else '' }}">
-      </div>
-      <div class="col-md-4 mb-3">
-        <label class="form-label">Stock</label>
-        <input name="stock" type="number" class="form-control" value="{{ product.stock if product else 0 }}">
-      </div>
-      <div class="col-md-4 mb-3">
-        <label class="form-label">Image URL</label>
-        <input name="image_url" class="form-control" value="{{ product.image_url if product else '' }}">
-      </div>
-    </div>
+    {% for col in cols %}
+      {% set col_name = col[1] %}
+      {% set col_type = col[2]|upper %}
+      {% set value = getattr(product, col_name, '') if product else '' %}
+      {% set label = col_name.replace('_', ' ')|title %}
 
-    {# Render other/dynamic fields #}
-    <hr>
-    <h5 class="mt-4 mb-3">Additional Fields</h5>
-    {% if cols %}
-      {% for col in cols %}
-        {% set col_name = col[1] %}
-        {% if col_name not in handled_fields %}
-          {% set col_type = col[2] %}
-          {% set value = getattr(product, col_name, '') if product else '' %}
-          <div class="mb-3">
-            <label class="form-label">{{ col_name.replace('_', ' ')|title }}</label>
-            {% set input_type = 'number' if 'INT' in col_type|upper else 'text' %}
-            <input name="{{ col_name }}" type="{{ input_type }}" class="form-control" value="{{ value }}">
-          </div>
+      <div class="mb-3">
+        {# Special handling for price_cents to provide a more user-friendly price field #}
+        {% if col_name == 'price_cents' %}
+          <label class="form-label">Price (e.g. 12.50)</label>
+          <input name="price" class="form-control" value="{{ product.price_display() if product and hasattr(product, 'price_display') else '' }}">
+
+        {% elif 'TEXT' in col_type or 'CHAR' in col_type %}
+          <label class="form-label">{{ label }}</label>
+          <textarea name="{{ col_name }}" class="form-control" rows="3">{{ value }}</textarea>
+
+        {% else %}
+          <label class="form-label">{{ label }}</label>
+          {% set input_type = 'number' if 'INT' in col_type else 'text' %}
+          <input name="{{ col_name }}" type="{{ input_type }}" class="form-control" value="{{ value }}">
         {% endif %}
-      {% endfor %}
-    {% endif %}
+      </div>
+    {% endfor %}
 
     <button class="btn btn-primary" type="submit">Save</button>
     <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Cancel</a>
@@ -515,7 +350,7 @@ compare_tpl = """
           <tr>
             <th>Attribute</th>
             {% for p in products %}
-              <th>{{ p.name }}</th>
+              <th>{{ getattr(p, 'name', 'Unnamed Product') }}</th>
             {% endfor %}
           </tr>
         </thead>
@@ -527,12 +362,16 @@ compare_tpl = """
               {% for p in products %}
                 <td>
                   {% set value = getattr(p, col_name, None) %}
-                  {% if col_name == 'price_cents' %}
-                    €{{ '%.2f'|format(value / 100.0 if value else 0) }}
-                  {% elif col_name == 'image_url' and value %}
-                    <img src="{{ value }}" style="max-height:100px;" alt="{{ p.name }} image">
+                  {% if value is not none %}
+                    {% if col_name == 'price_cents' %}
+                      €{{ '%.2f'|format(value / 100.0) }}
+                    {% elif (col_name == 'image_url' or col_name.endswith('_url')) and (value.startswith('http') or value.startswith('/')) %}
+                      <img src="{{ value }}" style="max-height:100px; max-width:150px;" alt="{{ getattr(p, 'name', 'Product image') }}">
+                    {% else %}
+                      {{ value }}
+                    {% endif %}
                   {% else %}
-                    {{ value if value is not none else '-' }}
+                    -
                   {% endif %}
                 </td>
               {% endfor %}
@@ -684,161 +523,189 @@ app.jinja_loader = DictLoader({
 @app.route('/')
 def index():
     q = request.args.get('q', '').strip()
-    if q:
-        like = f"%{q}%"
-        products = Product.query.filter(
-            db.or_(Product.name.ilike(like), Product.category.ilike(like))
-        ).order_by(Product.id.desc()).all()
-    else:
-        products = Product.query.order_by(Product.id.desc()).all()
+    with get_sqlite_connection() as conn:
+        if q:
+            # Get text-like columns to search
+            cols_info = get_table_info('product')
+            text_cols = [c[1] for c in cols_info if 'TEXT' in c[2].upper() or 'CHAR' in c[2].upper()]
+
+            # Build a WHERE clause with ORs for all text columns
+            # This is not perfectly safe against a determined attacker if they can control column names.
+            # However, column names are sanitized on creation, so this is a reasonable tradeoff.
+            where_clauses = [f"LOWER({col}) LIKE ?" for col in text_cols]
+            sql_where = " OR ".join(where_clauses)
+            params = [f"%{q.lower()}%"] * len(text_cols)
+
+            cur = conn.execute(f"SELECT * FROM product WHERE {sql_where} ORDER BY id DESC", params)
+        else:
+            cur = conn.execute("SELECT * FROM product ORDER BY id DESC")
+
+        rows = cur.fetchall()
+        # Convert rows to list of SimpleNamespace objects to allow dot notation access in template
+        products = [SimpleNamespace(**dict(row)) for row in rows]
+
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products)
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):
-    p = Product.query.get_or_404(product_id)
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0], product=p)
+    with get_sqlite_connection() as conn:
+        row = conn.execute("SELECT * FROM product WHERE id = ?", (product_id,)).fetchone()
+
+    if not row:
+        return "Product not found", 404
+
+    product = SimpleNamespace(**dict(row))
+
+    # Helper to safely get attributes, especially for templates
+    def _getattr(obj, key, default=''):
+        return getattr(obj, key, default)
+
+    cols_info = get_table_info('product')
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'view.html')[0],
+                                  product=product,
+                                  cols=cols_info,
+                                  getattr=_getattr)
 
 @app.route('/add', methods=['GET', 'POST'])
 def add_product():
-    if request.method == 'POST':
-        # Read current schema to know columns
-        cols_info = get_table_info('product')
-        col_names = [c[1] for c in cols_info if c[1] != 'id']
+    cols_info = get_table_info('product')
+    # Exclude 'id' which is autoincrement
+    cols_for_form = [c for c in cols_info if c[1] != 'id']
 
-        # Build values dict from form and defaults
+    if request.method == 'POST':
         values = {}
-        for name in col_names:
-            if name == 'price_cents':
-                # form uses 'price'
+        for col_name, col_type, _, _, _, _ in cols_for_form:
+            val = request.form.get(col_name)
+
+            # Special handling for price, assuming a 'price' form field for user convenience
+            if col_name == 'price_cents' and 'price' in request.form:
                 price_raw = request.form.get('price', '0').strip()
                 try:
                     price = Decimal(price_raw)
                     values['price_cents'] = int((price * 100).quantize(Decimal('1')))
                 except Exception:
-                    flash('Invalid price format')
+                    flash('Invalid price format for price_cents')
                     return redirect(url_for('add_product'))
+                continue
+
+            if 'INT' in col_type and val:
+                try:
+                    values[col_name] = int(val)
+                except (ValueError, TypeError):
+                     flash(f"Invalid integer value for {col_name}")
+                     return redirect(url_for('add_product'))
             else:
-                values[name] = request.form.get(name, None)
+                values[col_name] = val if val != '' else None
 
-        # Insert via SQLAlchemy for known columns if possible
-        p = Product(
-            name=values.get('name') or 'Unnamed',
-            description=values.get('description'),
-            price_cents=values.get('price_cents', 0) or 0,
-            stock=int(values.get('stock') or 0),
-            category=values.get('category'),
-            image_url=values.get('image_url')
-        )
-        db.session.add(p)
-        db.session.commit()
+        col_names = [sanitize_identifier(k) for k in values.keys()]
+        placeholders = ','.join(['?'] * len(values))
+        sql = f"INSERT INTO product ({','.join(col_names)}) VALUES ({placeholders})"
 
-        # For any extra dynamic columns, update directly
-        extra_cols = {k: v for k, v in values.items() if k not in ['name','description','price_cents','stock','category','image_url']}
-        if extra_cols:
-            with get_sqlite_connection() as conn:
-                set_clause = ",".join([f"{k}=?" for k in extra_cols.keys()])
-                params = list(extra_cols.values()) + [p.id]
-                conn.execute(f"UPDATE product SET {set_clause} WHERE id = ?", params)
-                conn.commit()
+        with get_sqlite_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(sql, list(values.values()))
+            new_id = cur.lastrowid
+            conn.commit()
 
-        # record creation versions
-        diffs = []
-        for k, v in values.items():
-            diffs.append((k, None, v))
-        record_field_versions(p.id, diffs, changed_by='create')
+        # Record creation as a set of field versions
+        diffs = [(k, None, v) for k,v in values.items()]
+        record_field_versions(new_id, diffs, changed_by='create')
 
         flash('Product added')
         return redirect(url_for('index'))
 
-    cols_info = get_table_info('product')
-    cols_for_form = [c for c in cols_info if c[1] != 'id']
     return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Add product', product=None, cols=cols_for_form, getattr=getattr)
 
 @app.route('/edit/<int:product_id>', methods=['GET', 'POST'])
 def edit_product(product_id):
-    # We'll perform edit via raw SQL to support dynamic columns and capture versions
     cols_info = get_table_info('product')
-    col_names = [c[1] for c in cols_info]
+    cols_for_form = [c for c in cols_info if c[1] != 'id']
+    col_map = {c[1]: c for c in cols_info}
 
-    # fetch current row as dict
     with get_sqlite_connection() as conn:
-        cur = conn.execute(f"SELECT * FROM product WHERE id = ?", (product_id,))
-        row = cur.fetchone()
-        if not row:
-            return 'Not found', 404
-        current = dict(zip([d[0] for d in cur.description], row))
+        current_row = conn.execute("SELECT * FROM product WHERE id = ?", (product_id,)).fetchone()
+    if not current_row:
+        return "Product not found", 404
+    current_values = dict(current_row)
 
     if request.method == 'POST':
         new_values = {}
-        for name in col_names:
-            if name == 'id':
-                continue
-            if name == 'price_cents':
+        for col_name, col_type, _, _, _, _ in cols_for_form:
+            val = request.form.get(col_name)
+
+            if col_name == 'price_cents' and 'price' in request.form:
                 price_raw = request.form.get('price', '').strip()
-                if price_raw == '':
-                    # keep existing
-                    new_values['price_cents'] = current.get('price_cents')
-                else:
-                    try:
-                        price = Decimal(price_raw)
-                        new_values['price_cents'] = int((price * 100).quantize(Decimal('1')))
-                    except Exception:
-                        flash('Invalid price format')
-                        return redirect(url_for('edit_product', product_id=product_id))
-            else:
-                # prefer form value if present, otherwise current
-                if name in request.form:
-                    val = request.form.get(name)
-                    new_values[name] = val
-                else:
-                    new_values[name] = current.get(name)
+                try:
+                    price = Decimal(price_raw)
+                    new_values['price_cents'] = int((price * 100).quantize(Decimal('1')))
+                except Exception:
+                    flash('Invalid price format for price_cents')
+                    return redirect(url_for('edit_product', product_id=product_id))
+                continue
 
-        # compute diffs
-        diffs = []
-        for name, newv in new_values.items():
-            oldv = current.get(name)
-            # normalize None/empty
-            if oldv is None:
-                oldv_norm = None
+            if 'INT' in col_type and val:
+                try:
+                    new_values[col_name] = int(val) if val else None
+                except (ValueError, TypeError):
+                    flash(f"Invalid integer value for {col_name}")
+                    return redirect(url_for('edit_product', product_id=product_id))
             else:
-                oldv_norm = str(oldv)
-            if newv is None:
-                newv_norm = None
-            else:
-                newv_norm = str(newv)
-            if oldv_norm != newv_norm:
-                diffs.append((name, oldv, newv))
+                new_values[col_name] = val if val != '' else None
 
-        # apply update via SQL
-        set_clause = ",".join([f"{k}=?" for k in new_values.keys()])
+        # Build UPDATE statement
+        set_clauses = [f"{sanitize_identifier(k)}=?" for k in new_values.keys()]
+        sql = f"UPDATE product SET {','.join(set_clauses)} WHERE id=?"
         params = list(new_values.values()) + [product_id]
+
         with get_sqlite_connection() as conn:
-            conn.execute(f"UPDATE product SET {set_clause} WHERE id = ?", params)
+            conn.execute(sql, params)
             conn.commit()
 
-        # record versions
-        record_field_versions(product_id, diffs, changed_by='edit')
+        # Compute diffs and record versions
+        diffs = []
+        for name, new_v in new_values.items():
+            old_v = current_values.get(name)
+            # Compare as strings to handle type differences (e.g. 1 vs '1')
+            if str(old_v) != str(new_v):
+                diffs.append((name, old_v, new_v))
+
+        if diffs:
+            record_field_versions(product_id, diffs, changed_by='edit')
 
         flash('Product updated')
         return redirect(url_for('view_product', product_id=product_id))
 
-    # For GET render SQL-backed product to include dynamic fields
-    product = SimpleNamespace(**current)
-    # For template compatibility, ensure product has expected attributes
-    if not hasattr(product, 'price_cents'):
-        product.price_cents = 0
-    def price_display():
-        return f"{product.price_cents/100:.2f}"
-    product.price_display = price_display
+    # GET request: prepare product for template
+    product = SimpleNamespace(**current_values)
 
-    cols_for_form = [c for c in cols_info if c[1] != 'id']
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0], title='Edit product', product=product, cols=cols_for_form, getattr=getattr)
+    # Add a helper for templates to display price from price_cents
+    def price_display_helper():
+        price_cents = getattr(product, 'price_cents', 0)
+        if price_cents is None: return "0.00"
+        return f"{price_cents / 100:.2f}"
+    product.price_display = price_display_helper
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'form.html')[0],
+                                  title='Edit product',
+                                  product=product,
+                                  cols=cols_for_form,
+                                  getattr=getattr)
 
 @app.route('/delete/<int:product_id>')
 def delete_product(product_id):
-    p = Product.query.get_or_404(product_id)
-    db.session.delete(p)
-    db.session.commit()
+    with get_sqlite_connection() as conn:
+        # Optional: check if product exists before deleting
+        cur = conn.execute("SELECT id FROM product WHERE id = ?", (product_id,))
+        if cur.fetchone() is None:
+            flash('Product not found.')
+            return redirect(url_for('index'))
+
+        conn.execute("DELETE FROM product WHERE id = ?", (product_id,))
+        conn.commit()
+
+    # Note: versioning for deletes could be implemented here if needed,
+    # e.g. by moving the row to an archive table. For now, it's a hard delete.
+
     flash('Product deleted')
     return redirect(url_for('index'))
 
@@ -955,21 +822,18 @@ def rollback():
 # --- API --------------------------------------------------------------------
 @app.route('/api/products')
 def api_products():
-    products = Product.query.all()
-    return {
-        'products': [
-            {
-                'id': p.id,
-                'name': p.name,
-                'description': p.description,
-                'price': p.price_cents / 100.0,
-                'stock': p.stock,
-                'category': p.category,
-                'image_url': p.image_url,
-            }
-            for p in products
-        ]
-    }
+    with get_sqlite_connection() as conn:
+        rows = conn.execute("SELECT * FROM product ORDER BY id DESC").fetchall()
+
+    products_list = []
+    for row in rows:
+        p_dict = dict(row)
+        # Handle price conversion if price_cents exists
+        if 'price_cents' in p_dict and p_dict['price_cents'] is not None:
+            p_dict['price'] = p_dict['price_cents'] / 100.0
+        products_list.append(p_dict)
+
+    return {'products': products_list}
 
 if __name__ == '__main__':
     os.makedirs(BASE_DIR, exist_ok=True)

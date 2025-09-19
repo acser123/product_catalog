@@ -321,16 +321,16 @@ index_tpl = """
           <div class="col">
             <div class="card h-100">
               <div class="card-body">
-                <h5 class="card-title">{{ getattr(p, 'Vendor_name', 'Unnamed Vendor') }}</h5>
+                {% for col_name in col_names %}
+                  <p class="card-text"><strong>{{ col_name.replace('_', ' ')|title }}:</strong> {{ getattr(p, col_name, 'N/A') }}</p>
+                {% endfor %}
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="ids" value="{{ p.id }}">
                   <label class="form-check-label">Compare</label>
                 </div>
               </div>
               <div class="card-footer d-flex justify-content-between align-items-center">
-                <strong class="me-2">
-
-                </strong>
+                <strong class="me-2"></strong>
                 <div>
                   <a class="btn btn-sm btn-primary" href="{{ url_for('view_product', product_id=p.id) }}">View</a>
                   <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('edit_product', product_id=p.id) }}">Edit</a>
@@ -639,7 +639,11 @@ def index():
         # Convert rows to list of SimpleNamespace objects to allow dot notation access in template
         products = [SimpleNamespace(**dict(row)) for row in rows]
 
-    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products)
+    # Get schema info to display columns dynamically
+    cols_info = get_table_info('product')
+    col_names = [c[1] for c in cols_info[:3]]
+
+    return render_template_string(app.jinja_loader.get_source(app.jinja_env, 'index.html')[0], products=products, col_names=col_names)
 
 @app.route('/product/<int:product_id>')
 def view_product(product_id):

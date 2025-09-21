@@ -322,7 +322,9 @@ layout = """
       {% block content %}{% endblock %}
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/colresizable/1.6.0/colresizable-1.6.min.js"></script>
   </body>
 </html>
 """
@@ -559,10 +561,9 @@ schema_tpl = """
   <p class="text-muted">Modify the <code>product</code> table schema. <strong>Note:</strong> after dropping/modifying columns you should restart the app to reload SQLAlchemy models.</p>
 
   <div class="row">
-    <div class="col-md-6">
+    <div class="col-md-7">
       <h4>Current Columns</h4>
-      <div class="table-responsive">
-        <table class="table table-sm">
+      <table id="schema-table" class="table table-sm">
         <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
         <tbody>
           {% for col in cols %}
@@ -602,9 +603,8 @@ schema_tpl = """
           {% endfor %}
         </tbody>
       </table>
-      </div>
     </div>
-    <div class="col-md-6">
+    <div class="col-md-5">
       <h4>Add Column</h4>
       <form method="post" action="{{ url_for('add_column') }}">
         <div class="mb-3"><label>Name</label><input name="name" class="form-control" required></div>
@@ -615,7 +615,7 @@ schema_tpl = """
 
       <hr>
       <h4>Raw CREATE TABLE</h4>
-      <pre>{{ create_sql }}</pre>
+      <pre style="white-space: pre-wrap; word-break: break-all;">{{ create_sql }}</pre>
 
       <hr>
       <h4>Run SQL Script</h4>
@@ -628,6 +628,17 @@ schema_tpl = """
       </form>
     </div>
   </div>
+
+  <script>
+    $(function() {
+      $("#schema-table").colResizable({
+        liveDrag: true,
+        gripInnerHtml: "<div class='grip'></div>",
+        draggingClass: "dragging",
+        resizeMode: 'fit'
+      });
+    });
+  </script>
 {% endblock %}
 """
 

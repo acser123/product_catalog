@@ -593,9 +593,10 @@ schema_tpl = """
   <div class="row">
     <div class="col-md-6">
       <h4>Current Columns</h4>
-      <table class="table table-sm">
-        <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
-        <tbody>
+      <div class="table-responsive">
+        <table class="table table-sm">
+          <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
+          <tbody>
           {% for col in cols %}
             <tr>
               <td>{{ col[1] }}</td>
@@ -633,6 +634,7 @@ schema_tpl = """
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
     <div class="col-md-6">
       <h4>Add Column</h4>
@@ -658,6 +660,19 @@ schema_tpl = """
       </form>
     </div>
   </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/colresizable@1.6.0/colResizable-1.6.min.js"></script>
+  <script>
+    $(function(){
+      $(".table").colResizable({
+        liveDrag:true,
+        gripInnerHtml:"<div class='grip'></div>",
+        draggingClass:"dragging",
+        resizeMode:'fit'
+      });
+    });
+  </script>
 {% endblock %}
 """
 

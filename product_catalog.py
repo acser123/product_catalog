@@ -558,10 +558,11 @@ schema_tpl = """
   <h1>Schema Designer</h1>
   <p class="text-muted">Modify the <code>product</code> table schema. <strong>Note:</strong> after dropping/modifying columns you should restart the app to reload SQLAlchemy models.</p>
 
-  <div class="row" id="schema-designer">
-    <div id="left-pane">
+  <div class="row">
+    <div class="col-md-6">
       <h4>Current Columns</h4>
-      <table class="table table-sm">
+      <div class="table-responsive">
+        <table class="table table-sm">
         <thead><tr><th>Name</th><th>Type</th><th>NotNull</th><th>PK</th><th>Default</th><th>Actions</th></tr></thead>
         <tbody>
           {% for col in cols %}
@@ -601,8 +602,9 @@ schema_tpl = """
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
-    <div id="right-pane">
+    <div class="col-md-6">
       <h4>Add Column</h4>
       <form method="post" action="{{ url_for('add_column') }}">
         <div class="mb-3"><label>Name</label><input name="name" class="form-control" required></div>
@@ -613,7 +615,7 @@ schema_tpl = """
 
       <hr>
       <h4>Raw CREATE TABLE</h4>
-      <pre style="white-space: pre-wrap; word-break: break-all;">{{ create_sql }}</pre>
+      <pre>{{ create_sql }}</pre>
 
       <hr>
       <h4>Run SQL Script</h4>
@@ -626,27 +628,6 @@ schema_tpl = """
       </form>
     </div>
   </div>
-
-  <script src="https://unpkg.com/split.js/dist/split.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/colresizable@1.6.0/colResizable-1.6.min.js"></script>
-  <script>
-    $(function(){
-      $(".table").colResizable({
-        liveDrag:true,
-        gripInnerHtml:"<div class='grip'></div>",
-        draggingClass:"dragging",
-        resizeMode:'fit'
-      });
-    });
-  </script>
-
-  <script>
-    Split(['#left-pane', '#right-pane'], {
-        sizes: [50, 50],
-        minSize: 200,
-    });
-  </script>
 {% endblock %}
 """
 

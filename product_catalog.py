@@ -704,6 +704,19 @@ schema_tpl = """
       </form>
     </div>
   </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/colresizable@1.6.0/colResizable-1.6.min.js"></script>
+  <script>
+    $(function(){
+      $(".table").colResizable({
+        liveDrag:true,
+        gripInnerHtml:"<div class='grip'></div>",
+        draggingClass:"dragging",
+        resizeMode:'fit'
+      });
+    });
+  </script>
 {% endblock %}
 """
 

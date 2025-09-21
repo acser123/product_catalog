@@ -477,11 +477,11 @@ designer_tpl = """
         <label class="form-label">Attributes to Display</label>
         <div class="mb-2">
             <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="view-cols-select" id="view-select-all" onclick="setAllCheckboxes(true)">
+                <input class="form-check-input" type="radio" name="view-cols-select" id="view-select-all" onclick="setAllCheckboxes('view-cols-container', true)">
                 <label class="form-check-label" for="view-select-all">Select All</label>
             </div>
             <div class="form-check form-check-inline">
-                <input class="form-check-input" type="radio" name="view-cols-select" id="view-unselect-all" onclick="setAllCheckboxes(false)">
+                <input class="form-check-input" type="radio" name="view-cols-select" id="view-unselect-all" onclick="setAllCheckboxes('view-cols-container', false)">
                 <label class="form-check-label" for="view-unselect-all">Unselect All</label>
             </div>
         </div>
@@ -502,7 +502,17 @@ designer_tpl = """
     <hr>
     <h4>Product List Page Settings</h4>
     <p class="text-muted">Select which columns to display on the main products grid.</p>
-    <div class="mb-3">
+    <div class="mb-2">
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="list-cols-select" id="list-select-all" onclick="setAllCheckboxes('list-cols-container', true)">
+            <label class="form-check-label" for="list-select-all">Select All</label>
+        </div>
+        <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="list-cols-select" id="list-unselect-all" onclick="setAllCheckboxes('list-cols-container', false)">
+            <label class="form-check-label" for="list-unselect-all">Unselect All</label>
+        </div>
+    </div>
+    <div class="mb-3" id="list-cols-container">
       {% for col in all_columns %}
         <div class="form-check">
           <input class="form-check-input" type="checkbox" name="list_columns" value="{{ col[1] }}" id="list-col-{{ col[1] }}" {% if col[1] in selected_list_columns %}checked{% endif %}>
@@ -516,8 +526,8 @@ designer_tpl = """
   </form>
 
   <script>
-    function setAllCheckboxes(isChecked) {
-        const container = document.getElementById('view-cols-container');
+    function setAllCheckboxes(containerId, isChecked) {
+        const container = document.getElementById(containerId);
         const checkboxes = container.querySelectorAll('input[type="checkbox"]');
         checkboxes.forEach(checkbox => {
             checkbox.checked = isChecked;
